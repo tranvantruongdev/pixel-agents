@@ -134,6 +134,9 @@ export const TERMINAL_DEFAULT_COLS = 80;
 export const TERMINAL_DEFAULT_ROWS = 24;
 /** TERM value exported into the PTY. */
 export const TERMINAL_TERM_NAME = 'xterm-256color';
+/** Extensions tried for a bare command on Windows when the env has no PATHEXT
+ *  (cmd.exe's own fallback list). */
+export const WINDOWS_DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
 /** Grace period between SIGHUP and SIGKILL when disposing a PTY. */
 export const TERMINAL_KILL_GRACE_MS = 2_000;
 /** How long shutdown waits past the SIGKILL escalation for the exits to land. */

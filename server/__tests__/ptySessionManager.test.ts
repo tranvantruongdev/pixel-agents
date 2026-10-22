@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { TERMINAL_MIRROR_SCROLLBACK_LINES } from '../src/constants.js';
 import type { IPty, PtyModule, PtyModuleResolution } from '../src/terminal/ptyModule.js';
-import { PtySessionManager } from '../src/terminal/ptySessionManager.js';
+import { PtySessionManager, resolvePtyCommand } from '../src/terminal/ptySessionManager.js';
 
 /**
  * Fake PTY. Tests never spawn a real process: they'd be slow, platform-specific,
@@ -71,8 +75,15 @@ function harness(overrides: Partial<PtyModuleResolution> = {}): Harness {
   return { manager, spawned, spawnArgs };
 }
 
+// Not 'claude': on a Windows machine with Claude Code installed, spawn resolves
+// a bare command through PATH, and the assertions below would see that path.
 function create(manager: PtySessionManager, agentId = 1) {
-  return manager.create({ agentId, command: 'claude', args: ['--session-id', 'x'], cwd: '/tmp' });
+  return manager.create({
+    agentId,
+    command: 'fake-agent',
+    args: ['--session-id', 'x'],
+    cwd: '/tmp',
+  });
 }
 
 describe('PtySessionManager availability', () => {
@@ -118,11 +129,50 @@ describe('PtySessionManager availability', () => {
   });
 });
 
+describe('resolvePtyCommand', () => {
+  // node-pty on Windows searches PATH for the bare name only, so `claude` threw
+  // "File not found" while claude.exe / claude.cmd sat on PATH.
+  const tmpDirs: string[] = [];
+  afterAll(() => {
+    for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function pathDirs(...files: string[][]): string[] {
+    return files.map((names) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-pty-cmd-'));
+      tmpDirs.push(dir);
+      for (const name of names) fs.writeFileSync(path.join(dir, name), '');
+      return dir;
+    });
+  }
+
+  it('on Windows, resolves a bare command through PATH and PATHEXT, first PATH dir wins', () => {
+    const [npmDir, wingetDir] = pathDirs(['claude.cmd'], ['claude.exe']);
+    // Windows env names are case-insensitive: the real variable is usually `Path`.
+    const env = { Path: `${npmDir};${wingetDir}`, PATHEXT: '.COM;.EXE;.BAT;.CMD' };
+    expect(resolvePtyCommand('claude', env, 'win32')).toBe(path.join(npmDir, 'claude.cmd'));
+    expect(resolvePtyCommand('claude', { ...env, Path: wingetDir }, 'win32')).toBe(
+      path.join(wingetDir, 'claude.exe'),
+    );
+  });
+
+  it('leaves the command alone when there is nothing to resolve', () => {
+    const [dir] = pathDirs(['claude.exe']);
+    const env = { PATH: dir, PATHEXT: '.EXE' };
+    expect(resolvePtyCommand('claude', env, 'linux')).toBe('claude');
+    expect(resolvePtyCommand('claude.exe', env, 'win32')).toBe('claude.exe');
+    expect(resolvePtyCommand(path.join(dir, 'claude'), env, 'win32')).toBe(
+      path.join(dir, 'claude'),
+    );
+    expect(resolvePtyCommand('codex', env, 'win32')).toBe('codex');
+  });
+});
+
 describe('PtySessionManager lifecycle', () => {
   it('spawns with the requested command, cwd, and TERM', () => {
     const { manager, spawnArgs } = harness();
     create(manager, 7);
-    expect(spawnArgs[0].file).toBe('claude');
+    expect(spawnArgs[0].file).toBe('fake-agent');
     expect(spawnArgs[0].args).toEqual(['--session-id', 'x']);
     expect(spawnArgs[0].options.cwd).toBe('/tmp');
     expect((spawnArgs[0].options.env as Record<string, string>).TERM).toBeTruthy();

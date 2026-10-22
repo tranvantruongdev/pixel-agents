@@ -124,10 +124,12 @@ describe('launchStandaloneAgent', () => {
     expect(agent?.palette).toBeTypeOf('number');
     expect(agent?.hueShift).toBeTypeOf('number');
 
-    // The real claude launch command, spawned in the requested cwd.
+    // The real claude launch command, spawned in the requested cwd. On Windows
+    // the bare name is resolved to a full path (claude.exe / claude.cmd) when
+    // Claude Code is installed on the machine running the tests.
 
     expect(harness.spawnArgs).toHaveLength(1);
-    expect(harness.spawnArgs[0].file).toBe('claude');
+    expect(path.parse(harness.spawnArgs[0].file).name).toBe('claude');
     expect(harness.spawnArgs[0].args).toEqual(['--session-id', agent?.sessionId]);
     expect(harness.spawnArgs[0].options.cwd).toBe(cwd);
     expect(harness.manager.has(1)).toBe(true);

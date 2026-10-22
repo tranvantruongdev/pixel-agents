@@ -13,6 +13,8 @@
 
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { Terminal as HeadlessTerminal } from '@xterm/headless';
+import * as fs from 'fs';
+import * as path from 'path';
 
 import {
   TERMINAL_DEFAULT_COLS,
@@ -21,6 +23,7 @@ import {
   TERMINAL_MIRROR_SCROLLBACK_LINES,
   TERMINAL_SHUTDOWN_SLACK_MS,
   TERMINAL_TERM_NAME,
+  WINDOWS_DEFAULT_PATHEXT,
 } from '../constants.js';
 import type { IPty, PtyModule } from './ptyModule.js';
 import { resolvePtyModule } from './ptyModule.js';
@@ -340,11 +343,41 @@ function spawnPty(
   }
   Object.assign(env, options.env ?? {}, { TERM: TERMINAL_TERM_NAME });
 
-  return module.spawn(options.command, options.args, {
+  return module.spawn(resolvePtyCommand(options.command, env), options.args, {
     name: TERMINAL_TERM_NAME,
     cols,
     rows,
     cwd: options.cwd,
     env,
   });
+}
+
+/**
+ * node-pty on Windows searches PATH for the bare name without trying PATHEXT
+ * extensions, so `claude` fails with "File not found" even though `claude.exe`
+ * (native installer) or `claude.cmd` (npm global shim) is on PATH. Resolve it
+ * the way cmd.exe would; node-pty runs a resolved .exe or .cmd directly.
+ * Anything with an extension or a directory part is passed through untouched.
+ */
+export function resolvePtyCommand(
+  command: string,
+  env: Record<string, string>,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== 'win32' || path.extname(command) || /[\\/]/.test(command)) return command;
+  const dirs = (envValue(env, 'PATH') ?? '').split(';').filter(Boolean);
+  const exts = (envValue(env, 'PATHEXT') ?? WINDOWS_DEFAULT_PATHEXT).split(';').filter(Boolean);
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, command + ext.toLowerCase());
+      if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) return candidate;
+    }
+  }
+  return command;
+}
+
+/** Windows env names are case-insensitive; the PATH variable is usually `Path`. */
+function envValue(env: Record<string, string>, name: string): string | undefined {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === name);
+  return key === undefined ? undefined : env[key];
 }
