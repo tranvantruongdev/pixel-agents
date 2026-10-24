@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 
 import type { AgentEvent, HookProvider } from '../../../../../core/src/provider.js';
@@ -72,7 +73,23 @@ function buildLaunchCommand(
   _sessionId: string,
   cwd: string,
 ): { command: string; args: string[]; env?: Record<string, string> } {
-  return { command: 'opencode', args: [], env: { PWD: cwd } };
+  return { command: desktopBundledCli() ?? 'opencode', args: [], env: { PWD: cwd } };
+}
+
+/** The CLI the OpenCode desktop app ships (Windows per-user install). Preferred
+ *  over `opencode` on PATH: the desktop app migrates the shared session DB
+ *  (~/.local/share/opencode) to its own, newer schema, and an older npm CLI then
+ *  fails on it at startup — its TUI just sits on a blank screen. */
+function desktopBundledCli(): string | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const cli = path.join(
+    process.env['LOCALAPPDATA'] ?? '',
+    'Programs',
+    '@opencodedesktop',
+    'resources',
+    'opencode-cli.exe',
+  );
+  return fs.existsSync(cli) ? cli : undefined;
 }
 
 // ── normalizeHookEvent: the single OpenCode-specific normalization boundary ──
