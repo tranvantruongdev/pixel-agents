@@ -42,7 +42,6 @@ import {
   hookProviders,
   installBridgePlugin,
   opencodeProvider,
-  zcodeProvider,
 } from './providers/index.js';
 import { PixelAgentsServer } from './server.js';
 import { PtySessionManager } from './terminal/ptySessionManager.js';
@@ -226,8 +225,8 @@ function prepareProviderFilesOrReport(
   context = '',
 ): boolean {
   if (providerId === claudeProvider.id) return copyHookScriptOrReport(packageRoot, context);
-  // DeepSeek and ZCode install nothing: their runs post to this server directly.
-  if (providerId === dshProvider.id || providerId === zcodeProvider.id) return true;
+  // DeepSeek installs nothing: its chat loop ships in dist/hooks and posts directly.
+  if (providerId === dshProvider.id) return true;
   if (providerId === opencodeProvider.id) return installBridgePluginOrReport(packageRoot, context);
   if (providerId === codexProvider.id) {
     if (copyCodexHookScript(packageRoot)) return true;
@@ -438,7 +437,7 @@ async function main(): Promise<void> {
       // absent is skipped in SILENCE — an approval notice for a tool the user
       // never installed is pure noise.
       for (const provider of hookProviders) {
-        if ([claudeProvider.id, dshProvider.id, zcodeProvider.id].includes(provider.id)) continue;
+        if (provider.id === claudeProvider.id || provider.id === dshProvider.id) continue;
         if (provider.isPresent?.() === false) continue;
         if (!getHooksEnabled(provider.id)) continue;
         if (getHooksConsent(provider.id) !== 'granted') {
