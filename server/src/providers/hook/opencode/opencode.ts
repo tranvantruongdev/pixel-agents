@@ -73,7 +73,11 @@ function buildLaunchCommand(
   _sessionId: string,
   cwd: string,
 ): { command: string; args: string[]; env?: Record<string, string> } {
-  return { command: desktopBundledCli() ?? 'opencode', args: [], env: { PWD: cwd } };
+  const desktopCli = desktopBundledCli();
+  // The 2.x TUI otherwise attaches to the desktop's background service, which
+  // runs the bridge plugin without this terminal's env (no launch id to adopt).
+  if (desktopCli) return { command: desktopCli, args: ['--standalone'], env: { PWD: cwd } };
+  return { command: 'opencode', args: [], env: { PWD: cwd } };
 }
 
 /** The CLI the OpenCode desktop app ships (Windows per-user install). Preferred

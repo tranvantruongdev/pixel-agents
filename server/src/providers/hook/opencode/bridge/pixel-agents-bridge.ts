@@ -240,7 +240,7 @@ function permissionPrompt(input: Record<string, unknown>): void {
 }
 
 // ── Plugin ───────────────────────────────────────────────────────────────────
-// One named export, the shape OpenCode's plugin loader calls with its context.
+// The 1.x entry: a named export OpenCode 1.x calls with its context.
 // Handlers stay synchronous and fire-and-forget: nothing here may delay the
 // tool call or session transition being reported.
 //
@@ -274,3 +274,65 @@ export const PixelAgents = async () => ({
     permissionPrompt(input);
   },
 });
+
+// ── OpenCode 2.x ─────────────────────────────────────────────────────────────
+// 2.x loads only `export default { id, setup }` and rejects anything else
+// ("Plugin must export a default definition with an id and an effect or setup
+// function"). setup gets a context with tool hooks and an event stream instead
+// of v1's keyed handlers; the payloads are translated into the v1 shapes the
+// functions above already read. Measured on opencode-cli 2.1.3: tool hooks
+// carry {tool, sessionID, id, input[, status]}; event.subscribe() returns an
+// async iterable of {type, data, location: {directory}}. 2.x fires no
+// session.created / session.idle: a turn is session.execution.started …
+// session.execution.<outcome>.
+
+interface V2Context {
+  tool: { hook(name: string, fn: (e: Record<string, unknown>) => void): Promise<{ dispose(): void }> };
+  event: { subscribe(): AsyncIterable<Record<string, unknown>> };
+}
+
+function v2Tool(e: Record<string, unknown>): Record<string, unknown> {
+  return { tool: e['tool'], sessionID: e['sessionID'], callID: e['id'], args: e['input'] };
+}
+
+/** Sessions already announced with SessionStart. */
+const startedSessions = new Set<string>();
+
+function v2Event(ev: Record<string, unknown>): void {
+  const type = str(ev['type']) ?? '';
+  const data = record(ev['data']);
+  const sessionID = str(data['sessionID']);
+  if (type === 'permission.asked') return permissionPrompt(data);
+  if (!sessionID || !type.startsWith('session.')) return;
+  if (type === 'session.deleted') return sessionEnd({ id: sessionID });
+  if (!startedSessions.has(sessionID)) {
+    startedSessions.add(sessionID);
+    sessionStart({ id: sessionID, directory: str(record(ev['location'])['directory']) });
+  }
+  if (type.startsWith('session.execution.') && type !== 'session.execution.started') {
+    emit({ hook_event_name: 'Stop', session_id: sessionID });
+  }
+}
+
+// 2.x requires a plain object here (a function with these props is rejected).
+// ponytail: 1.x calls every export as a plugin function, so this default
+// breaks 1.x loading; the named export stays for when that matters again.
+export default {
+  id: 'pixel-agents',
+  setup(ctx: V2Context) {
+    const hooks = [
+      ctx.tool.hook('execute.before', (e) => toolBefore(v2Tool(e))),
+      ctx.tool.hook('execute.after', (e) =>
+        toolAfter(v2Tool(e), { metadata: { exit: e['status'] === 'error' ? 1 : 0 } }),
+      ),
+    ];
+    void (async () => {
+      for await (const ev of ctx.event.subscribe()) v2Event(ev);
+    })().catch(() => {
+      /* the stream ends with the plugin; nothing to report */
+    });
+    return async () => {
+      for (const hook of hooks) (await hook).dispose();
+    };
+  },
+};
