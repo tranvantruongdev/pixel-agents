@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { TRANSPORT_STATE_CONNECTED, TRANSPORT_STATE_RECONNECTING } from '../../../core/src/constants.js';
 import type { HooksConsentRequest } from '../../../core/src/messages.js';
 import type { LaunchProvider } from '../launchProvider.js';
 import { playDoneSound, playPermissionSound, setSoundEnabled } from '../notificationSound.js';
@@ -260,6 +261,25 @@ export function useExtensionMessages(
       setAgentDirectoryNames((prev) => (prev.includes(name) ? prev : [...prev, name]));
     };
 
+    const dropAgent = (os: OfficeState, id: number) => {
+      setAgents((prev) => prev.filter((a) => a !== id));
+      setSelectedAgent((prev) => (prev === id ? null : prev));
+      // Drop the drawer tab too. terminalSessionClosed normally does this, but
+      // an agent can be removed without its PTY ever reporting an exit (e.g.
+      // stale cleanup), and a tab for a gone agent would attach to nothing.
+      setTerminalAgentIds((prev) => prev.filter((a) => a !== id));
+      setAgentTools((prev) => omitKey(prev, id));
+      setAgentStatuses((prev) => omitKey(prev, id));
+      setAgentAwaitingInput((prev) => omitKey(prev, id));
+      setAgentSeenActivity((prev) => omitKey(prev, id));
+      setSubagentTools((prev) => omitKey(prev, id));
+      // Remove all sub-agent characters belonging to this agent
+      delete backgroundParentToolIdsRef.current[id];
+      os.removeAllSubagents(id);
+      setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id));
+      os.removeAgent(id);
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handler = (msg: any) => {
       const os = getOfficeState();
@@ -394,25 +414,18 @@ export function useExtensionMessages(
         }
         saveAgentSeats(os);
       } else if (msg.type === 'agentClosed') {
-        const id = msg.id as number;
-        setAgents((prev) => prev.filter((a) => a !== id));
-        setSelectedAgent((prev) => (prev === id ? null : prev));
-        // Drop the drawer tab too. terminalSessionClosed normally does this, but
-        // an agent can be removed without its PTY ever reporting an exit (e.g.
-        // stale cleanup), and a tab for a gone agent would attach to nothing.
-        setTerminalAgentIds((prev) => prev.filter((a) => a !== id));
-        setAgentTools((prev) => omitKey(prev, id));
-        setAgentStatuses((prev) => omitKey(prev, id));
-        setAgentAwaitingInput((prev) => omitKey(prev, id));
-        setAgentSeenActivity((prev) => omitKey(prev, id));
-        setSubagentTools((prev) => omitKey(prev, id));
-        // Remove all sub-agent characters belonging to this agent
-        delete backgroundParentToolIdsRef.current[id];
-        os.removeAllSubagents(id);
-        setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id));
-        os.removeAgent(id);
+        dropAgent(os, msg.id as number);
       } else if (msg.type === 'existingAgents') {
+        // Sent on every (re)connect handshake, before the server re-announces
+        // its live terminals. After a server restart agent ids restart too, so
+        // start the tab list over (a kept tab whose socket was refused with
+        // 4004 would swallow a new agent that reuses its id) and drop the
+        // characters this server no longer has.
+        setTerminalAgentIds([]);
         const incoming = msg.agents as number[];
+        for (const [id, ch] of os.characters) {
+          if (!ch.isSubagent && !incoming.includes(id)) dropAgent(os, id);
+        }
         const meta = (msg.agentMeta || {}) as Record<number, ExistingAgentMeta>;
         const directoryNames = (msg.directoryNames || {}) as Record<number, string>;
         const externalAgents = (msg.externalAgents || {}) as Record<number, boolean>;
@@ -853,7 +866,21 @@ export function useExtensionMessages(
     };
     const unsubscribe = transport.onMessage(handler);
     transport.send({ type: 'webviewReady' });
-    return unsubscribe;
+    // The server only sends its state in reply to webviewReady, so a socket
+    // that dropped (or a server that restarted) must be asked again, or this
+    // page keeps a stale office: gone agents, tabs bound to reused ids.
+    let reconnecting = false;
+    const offState = transport.onStateChange((state) => {
+      if (state === TRANSPORT_STATE_RECONNECTING) reconnecting = true;
+      else if (state === TRANSPORT_STATE_CONNECTED && reconnecting) {
+        reconnecting = false;
+        transport.send({ type: 'webviewReady' });
+      }
+    });
+    return () => {
+      unsubscribe();
+      offState();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getOfficeState]);
 
