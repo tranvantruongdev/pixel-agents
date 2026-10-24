@@ -32,7 +32,13 @@ import {
   WILDCARD_HOSTNAMES,
 } from './constants.js';
 import { FileStateAdapter } from './fileStateAdapter.js';
-import { claudeProvider, copyHookScript, hookProviderById } from './providers/index.js';
+import {
+  claudeProvider,
+  copyHookScript,
+  hookProviderById,
+  installBridgePlugin,
+  opencodeProvider,
+} from './providers/index.js';
 import { PixelAgentsServer } from './server.js';
 import { PtySessionManager } from './terminal/ptySessionManager.js';
 import { isLoopbackHost, normalizeHostname } from './wsAuth.js';
@@ -193,6 +199,19 @@ function reportTerminalStatus(
   }
 }
 
+/**
+ * Copy the OpenCode bridge plugin into ~/.config/opencode/plugins/, reporting failure.
+ *
+ * Same contract as copyHookScriptOrReport above: callers run this BEFORE the
+ * provider install and abort when it returns false, so a success report can
+ * never cover a missing plugin file.
+ */
+function installBridgePluginOrReport(packageRoot: string, context = ''): boolean {
+  if (installBridgePlugin(packageRoot)) return true;
+  console.error(`[Pixel Agents] Hooks NOT installed${context}: bridge plugin missing.`);
+  return false;
+}
+
 // ── Main ──────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -263,11 +282,18 @@ async function main(): Promise<void> {
         // An explicit toggle in the UI IS the consent to modify the
         // provider's settings file. The bundled claude-hook.js script belongs
         // to the Claude provider alone; another provider's install must
-        // neither copy it nor be blocked by it.
+        // neither copy it nor be blocked by it. The OpenCode bridge plugin
+        // belongs to the OpenCode provider the same way.
         grantHooksConsent(provider.id);
         if (
           provider.id === claudeProvider.id &&
           !copyHookScriptOrReport(packageRoot, ' (user toggle)')
+        ) {
+          return;
+        }
+        if (
+          provider.id === opencodeProvider.id &&
+          !installBridgePluginOrReport(packageRoot, ' (user toggle)')
         ) {
           return;
         }

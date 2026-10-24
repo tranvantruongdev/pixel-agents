@@ -454,11 +454,14 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
   // them.
   send({ type: 'officeAccess', readOnly: ctx.privileged !== true });
 
-  // 1. Provider capabilities (must arrive before any agent messages)
+  // 1. Provider capabilities (must arrive before any agent messages).
+  // Union over every registered provider: tool names are provider-namespaced
+  // by case convention (Claude PascalCase, OpenCode lowercase), so the union
+  // classifies each event's tools correctly with no per-agent routing.
   send({
     type: 'providerCapabilities',
-    readingTools: [...claudeProvider.readingTools],
-    subagentToolNames: [...claudeProvider.subagentToolNames],
+    readingTools: [...new Set(hookProviders.flatMap((p) => [...p.readingTools]))],
+    subagentToolNames: [...new Set(hookProviders.flatMap((p) => [...p.subagentToolNames]))],
   });
 
   // 1b. Terminal availability. Gates the whole terminal UI (the + Agent button
