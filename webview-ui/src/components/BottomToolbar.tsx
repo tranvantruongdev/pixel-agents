@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 
 import type { Directory } from '../hooks/useExtensionMessages.js';
+import {
+  getLaunchProviderId,
+  type LaunchProvider,
+  setLaunchProviderId,
+} from '../launchProvider.js';
 import { isBrowserRuntime } from '../runtime.js';
 import { transport } from '../transport/index.js';
 import { LaunchDrawer } from './LaunchDrawer.js';
@@ -20,6 +25,8 @@ interface BottomToolbarProps {
   terminalAvailable: boolean;
   /** Why the terminal is off (shown on the disabled button's tooltip). */
   terminalUnavailableReason: string | null;
+  /** CLIs + Agent can launch; with more than one, a button cycles the choice. */
+  launchProviders: LaunchProvider[];
 }
 
 export function BottomToolbar({
@@ -32,8 +39,16 @@ export function BottomToolbar({
   onEditDirectory,
   terminalAvailable,
   terminalUnavailableReason,
+  launchProviders,
 }: BottomToolbarProps) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [providerId, setProviderId] = useState(getLaunchProviderId);
+  const provider = launchProviders.find((p) => p.id === providerId) ?? launchProviders[0];
+  const cycleProvider = () => {
+    const next = launchProviders[(launchProviders.indexOf(provider) + 1) % launchProviders.length];
+    setProviderId(next.id);
+    setLaunchProviderId(next.id);
+  };
   const launchRef = useRef<HTMLDivElement>(null);
 
   // Close the launch drawer on outside press (the dropdown convention here).
@@ -57,7 +72,11 @@ export function BottomToolbar({
 
   const handleDirectorySelect = (directory: Directory) => {
     setIsDrawerOpen(false);
-    transport.send({ type: 'launchAgent', directoryPath: directory.path });
+    transport.send({
+      type: 'launchAgent',
+      directoryPath: directory.path,
+      providerId: provider?.id,
+    });
   };
 
   // Standalone can launch agents whenever the server has a working PTY. When it
@@ -96,6 +115,11 @@ export function BottomToolbar({
           >
             + Agent
           </Button>
+          {launchProviders.length > 1 && (
+            <Button onClick={cycleProvider} title="CLI that + Agent launches (click to switch)">
+              {provider.displayName}
+            </Button>
+          )}
           <LaunchDrawer
             isOpen={isDrawerOpen}
             directories={directories}

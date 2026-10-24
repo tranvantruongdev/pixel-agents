@@ -183,6 +183,18 @@ components:
           items:
             type: string
           description: Tool names that spawn sub-agent characters (e.g. Task, Agent).
+        launchProviders:
+          type: array
+          description: CLIs the + Agent button can launch on this host (standalone; installed ones only).
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, displayName]
+            properties:
+              id:
+                type: string
+              displayName:
+                type: string
 
     AgentCreated:
       description: A new agent has appeared in the office.
@@ -979,7 +991,7 @@ components:
           const: webviewReady
 
     LaunchAgent:
-      description: Launch a new Claude agent in a new terminal.
+      description: Launch a new agent in a new terminal.
       type: object
       additionalProperties: false
       required: [type]
@@ -989,6 +1001,9 @@ components:
         directoryPath:
           type: string
           description: Path of the Directory to launch into.
+        providerId:
+          type: string
+          description: Which CLI to launch (a HookProvider id); absent = Claude.
 
     FocusAgent:
       description: Focus an agent's terminal.

@@ -71,12 +71,11 @@ export function launchStandaloneAgent(
     return null;
   }
 
-  const dirs = provider.getSessionDirs?.(cwd) ?? [];
-  if (dirs.length === 0) {
-    console.error('[Pixel Agents] Terminal: provider returned no session dirs');
-    return null;
-  }
-  const projectDir = dirs[0];
+  // No session dir = a hooks-only CLI (Codex, OpenCode, DeepSeek): there is no
+  // transcript to pre-register or poll, and the agent lives in its cwd.
+  const sessionDir = provider.getSessionDirs?.(cwd)[0];
+  const hooksOnly = sessionDir === undefined;
+  const projectDir = sessionDir ?? cwd;
 
   const id = store.nextAgentId.current++;
 
@@ -87,7 +86,9 @@ export function launchStandaloneAgent(
       command: launch.command,
       args: launch.args,
       cwd,
-      env: launch.env,
+      // Hook scripts inherit this; it is how an id-minting CLI's first hook
+      // event finds the agent launched for it (HookEventHandler).
+      env: { ...launch.env, PIXEL_AGENTS_LAUNCH_ID: sessionId },
       cols: options.cols,
       rows: options.rows,
     });
@@ -100,8 +101,8 @@ export function launchStandaloneAgent(
 
   // Pre-register the expected JSONL so the project scanner doesn't mistake it
   // for a /clear file, exactly as the VS Code path does.
-  const expectedFile = path.join(projectDir, `${sessionId}.jsonl`);
-  runtime.knownJsonlFiles.add(expectedFile);
+  const expectedFile = hooksOnly ? '' : path.join(projectDir, `${sessionId}.jsonl`);
+  if (!hooksOnly) runtime.knownJsonlFiles.add(expectedFile);
 
   const agent = createAgentState({
     id,
@@ -151,7 +152,7 @@ export function launchStandaloneAgent(
     }
   });
 
-  startJsonlPoll(deps, id, agent);
+  if (!hooksOnly) startJsonlPoll(deps, id, agent);
 
   return id;
 }

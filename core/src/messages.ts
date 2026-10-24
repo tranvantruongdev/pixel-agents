@@ -81,6 +81,12 @@ export interface ProviderCapabilities {
   type: 'providerCapabilities';
   readingTools: string[];
   subagentToolNames: string[];
+  launchProviders?: AnonymousSchema_7[];
+}
+
+export interface AnonymousSchema_7 {
+  id: string;
+  displayName: string;
 }
 
 export interface AgentCreated {
@@ -383,6 +389,7 @@ export interface WebviewReady {
 export interface LaunchAgent {
   type: 'launchAgent';
   directoryPath?: string;
+  providerId?: string;
 }
 
 export interface FocusAgent {

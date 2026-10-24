@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { HooksConsentRequest } from '../../../core/src/messages.js';
+import type { LaunchProvider } from '../launchProvider.js';
 import { playDoneSound, playPermissionSound, setSoundEnabled } from '../notificationSound.js';
 import type { ExistingAgentMeta, PendingAgent } from '../office/engine/existingAgents.js';
 import { reconcileExistingAgents } from '../office/engine/existingAgents.js';
@@ -157,6 +158,8 @@ interface ExtensionMessageState {
   terminalUnavailableReason: string | null;
   /** Agent ids with a live server-side PTY, in the order they opened. */
   terminalAgentIds: number[];
+  /** CLIs + Agent can launch here (from providerCapabilities). */
+  launchProviders: LaunchProvider[];
 }
 
 /** Drop one key from a keyed-by-agent record without touching identity when
@@ -223,6 +226,7 @@ export function useExtensionMessages(
   // Terminal control plane (standalone only; the server never sends these in
   // VS Code mode, so terminalAvailable stays false and no terminal UI renders).
   const [terminalAvailable, setTerminalAvailable] = useState(false);
+  const [launchProviders, setLaunchProviders] = useState<LaunchProvider[]>([]);
   const [terminalUnavailableReason, setTerminalUnavailableReason] = useState<string | null>(null);
   /** Agent ids with a live PTY, in the order their terminals opened. */
   const [terminalAgentIds, setTerminalAgentIds] = useState<number[]>([]);
@@ -285,6 +289,7 @@ export function useExtensionMessages(
           readingTools: msg.readingTools,
           subagentToolNames: msg.subagentToolNames,
         });
+        setLaunchProviders(msg.launchProviders ?? []);
         return;
       }
 
@@ -921,5 +926,6 @@ export function useExtensionMessages(
     terminalAvailable,
     terminalUnavailableReason,
     terminalAgentIds,
+    launchProviders,
   };
 }

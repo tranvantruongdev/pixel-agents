@@ -46,6 +46,7 @@ function buildHooks() {
   const entries = [
     hookEntry('claude', 'claude-hook.ts'),
     hookEntry('codex', 'codex-hook.ts'),
+    hookEntry('dsh', 'dsh-chat.ts'),
   ].filter((p) => fs.existsSync(p));
   if (entries.length === 0) return;
   require('esbuild').buildSync({

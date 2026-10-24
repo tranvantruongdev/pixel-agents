@@ -138,7 +138,12 @@ function emit(envelope: Record<string, unknown>): void {
     bridgeDebug(`exit reason=no-server-json event=${eventName} sid=${sid}`);
     return;
   }
-  const body = JSON.stringify(envelope);
+  // Set only in an OpenCode that Pixel Agents itself launched: lets the server
+  // bind this session to the terminal it opened (OpenCode mints its own ids).
+  const launchId = process.env['PIXEL_AGENTS_LAUNCH_ID'];
+  const body = JSON.stringify(
+    launchId ? { ...envelope, pixel_agents_launch_id: launchId } : envelope,
+  );
   void Promise.all(servers.map((server) => postToServer(server, body)));
 }
 

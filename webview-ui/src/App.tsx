@@ -27,6 +27,7 @@ import { useIntroTour } from './hooks/useIntroTour.js';
 import { useIsMobile } from './hooks/useIsMobile.js';
 import { useKeyboardViewport } from './hooks/useKeyboardViewport.js';
 import { useTerminalDrawer } from './hooks/useTerminalDrawer.js';
+import { getLaunchProviderId } from './launchProvider.js';
 import { MobileShell } from './mobile/MobileShell.js';
 import { useMobileShell } from './mobile/useMobileShell.js';
 import { OfficeCanvas } from './office/components/OfficeCanvas.js';
@@ -122,6 +123,7 @@ function App() {
     terminalAvailable,
     terminalUnavailableReason,
     terminalAgentIds,
+    launchProviders,
   } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty);
 
   // Show migration notice once layout reset is detected
@@ -164,7 +166,11 @@ function App() {
   });
 
   const launchIntoDirectory = useCallback((directory: Directory) => {
-    transport.send({ type: 'launchAgent', directoryPath: directory.path });
+    transport.send({
+      type: 'launchAgent',
+      directoryPath: directory.path,
+      providerId: getLaunchProviderId(),
+    });
   }, []);
   const mobileShell = useMobileShell({
     getOfficeState,
@@ -641,6 +647,7 @@ function App() {
           onEditDirectory={directoryEditor.edit}
           terminalAvailable={terminalAvailable}
           terminalUnavailableReason={terminalUnavailableReason}
+          launchProviders={launchProviders}
         />
       )}
 

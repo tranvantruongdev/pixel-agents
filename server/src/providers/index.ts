@@ -14,9 +14,10 @@
 import type { HookProvider } from '../../../core/src/provider.js';
 import { claudeProvider } from './hook/claude/claude.js';
 import { codexProvider } from './hook/codex/codex.js';
+import { dshProvider } from './hook/dsh/dsh.js';
 import { opencodeProvider } from './hook/opencode/opencode.js';
 
-export { claudeProvider, codexProvider, opencodeProvider };
+export { claudeProvider, codexProvider, dshProvider, opencodeProvider };
 export { copyHookScript } from './hook/claude/claudeHookInstaller.js';
 export { copyHookScript as copyCodexHookScript } from './hook/codex/codexHookInstaller.js';
 export { installBridgePlugin } from './hook/opencode/opencodeBridgeInstaller.js';
@@ -28,6 +29,7 @@ export const hookProviders: readonly HookProvider[] = [
   claudeProvider,
   codexProvider,
   opencodeProvider,
+  dshProvider,
 ];
 
 /** Resolve a wire-supplied provider id, or undefined for an unknown one —

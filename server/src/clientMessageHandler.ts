@@ -1,3 +1,5 @@
+import * as path from 'path';
+
 import type { StateAdapter } from '../../core/src/adapter.js';
 import type { HookProvider } from '../../core/src/provider.js';
 import { resendAgentActivity } from './agentActivityResend.js';
@@ -26,6 +28,7 @@ import { applyConsentChoice } from './providers/hook/consentExecutor.js';
 import { hooksConsentRequest } from './providers/hook/consentGate.js';
 import { claudeProvider, hookProviderById, hookProviders } from './providers/index.js';
 import type { PtySessionManager } from './terminal/ptySessionManager.js';
+import { resolvePtyCommand } from './terminal/ptySessionManager.js';
 import { launchStandaloneAgent } from './terminal/standaloneAgentLauncher.js';
 
 type WsSend = (message: Record<string, unknown>) => void;
@@ -146,9 +149,13 @@ export function handleClientMessage(
       // Permission posture is a persisted per-host setting, never a per-launch
       // field: the client sends only where to launch. Every launch comes from a
       // drawer row and carries its Directory's path; no directoryPath falls
-      // back to the server cwd (launchStandaloneAgent's own default).
+      // back to the server cwd (launchStandaloneAgent's own default). No
+      // providerId = Claude; an unknown one launches nothing.
+      const launchProvider =
+        msg.providerId === undefined ? claudeProvider : hookProviderById(msg.providerId);
+      if (!launchProvider) break;
       launchStandaloneAgent(
-        { store, runtime, ptyManager: ctx.ptyManager, provider: claudeProvider },
+        { store, runtime, ptyManager: ctx.ptyManager, provider: launchProvider },
         {
           directoryPath: msg.directoryPath as string | undefined,
           bypassPermissions: adapter?.getSetting(KEY_BYPASS_PERMISSIONS, false) ?? false,
@@ -445,6 +452,16 @@ function standaloneConsentEffects(
   };
 }
 
+/** Can + Agent actually start this provider's CLI here? On Windows a bare
+ *  command must resolve on PATH (a CLI's config dir can exist without its
+ *  binary, e.g. Codex's desktop app). ponytail: elsewhere spawn reports it. */
+function isLaunchable(provider: HookProvider): boolean {
+  const command = provider.buildLaunchCommand?.('', process.cwd()).command;
+  if (!command) return false;
+  if (process.platform !== 'win32' || path.isAbsolute(command)) return true;
+  return resolvePtyCommand(command, process.env as Record<string, string>) !== command;
+}
+
 function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
   const { store, runtime, cache } = ctx;
   const adapter = store.getAdapter();
@@ -462,6 +479,10 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
     type: 'providerCapabilities',
     readingTools: [...new Set(hookProviders.flatMap((p) => [...p.readingTools]))],
     subagentToolNames: [...new Set(hookProviders.flatMap((p) => [...p.subagentToolNames]))],
+    // CLIs the + Agent picker offers: launchable and installed on this host.
+    launchProviders: hookProviders
+      .filter((p) => p.isPresent?.() !== false && isLaunchable(p))
+      .map((p) => ({ id: p.id, displayName: p.displayName })),
   });
 
   // 1b. Terminal availability. Gates the whole terminal UI (the + Agent button

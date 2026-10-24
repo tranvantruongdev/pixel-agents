@@ -181,8 +181,11 @@ describe('launchStandaloneAgent', () => {
     expect(harness.spawnArgs).toHaveLength(0);
   });
 
-  it('returns null when the provider returns no session dirs', () => {
+  it('launches a hooks-only provider (no session dirs) without a transcript', () => {
+    vi.useFakeTimers();
     const harness = workingPtyManager();
+    const cwd = path.join(tempDir, 'workspace');
+    fs.mkdirSync(cwd);
 
     const id = launchStandaloneAgent(
       {
@@ -191,12 +194,32 @@ describe('launchStandaloneAgent', () => {
         ptyManager: harness.manager,
         provider: provider({ getSessionDirs: () => [] }),
       },
-      {},
+      { directoryPath: cwd },
     );
 
-    expect(id).toBeNull();
-    expect(store.size).toBe(0);
-    expect(harness.spawnArgs).toHaveLength(0);
+    expect(id).toBe(1);
+    const agent = store.get(1)!;
+    expect(agent.projectDir).toBe(cwd);
+    expect(agent.jsonlFile).toBe('');
+    vi.advanceTimersByTime(JSONL_POLL_INTERVAL_MS * 2);
+    expect(runtime.jsonlPollTimers.has(1)).toBe(false);
+    // The launch id rides the env so an id-minting CLI's hooks can find this agent.
+    expect(harness.spawnArgs[0].options.env?.['PIXEL_AGENTS_LAUNCH_ID']).toBe(agent.sessionId);
+  });
+
+  it('re-keys a launched agent to the session id its first hook event reports', () => {
+    const harness = workingPtyManager();
+    const id = launch(harness)!;
+    const launchId = store.get(id)!.sessionId;
+
+    runtime.handleHookEvent(claudeProvider.id, {
+      hook_event_name: 'SessionStart',
+      session_id: 'cli-minted-session',
+      source: 'startup',
+      pixel_agents_launch_id: launchId,
+    });
+
+    expect(store.get(id)!.sessionId).toBe('cli-minted-session');
   });
 
   it('rolls back the agent id when the PTY spawn throws', () => {

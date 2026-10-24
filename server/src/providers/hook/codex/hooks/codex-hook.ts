@@ -178,7 +178,10 @@ async function main(): Promise<void> {
     if (p) debugLogPath = p;
   }
 
-  const body = JSON.stringify(data);
+  // Set only in a Codex that Pixel Agents itself launched: lets the server bind
+  // this session to the terminal it opened (Codex mints its own session id).
+  const launchId = process.env['PIXEL_AGENTS_LAUNCH_ID'];
+  const body = JSON.stringify(launchId ? { ...data, pixel_agents_launch_id: launchId } : data);
   await Promise.all(servers.map((server) => postToServer(server, body, eventName, sid)));
 }
 

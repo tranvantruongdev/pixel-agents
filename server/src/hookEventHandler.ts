@@ -134,6 +134,20 @@ export class HookEventHandler {
     }
   }
 
+  /** A CLI this server launched that mints its own session id (Codex, OpenCode)
+   *  reports the launch id we put in its env (PIXEL_AGENTS_LAUNCH_ID). Its first
+   *  event re-keys the launched agent from that placeholder to the real id. */
+  private adoptLaunchedSession(event: HookEvent): void {
+    const launchId = event['pixel_agents_launch_id'];
+    if (typeof launchId !== 'string' || this.sessionRouter.hasSession(event.session_id)) return;
+    const agentId = this.sessionRouter.resolve(launchId);
+    const agent = agentId === undefined ? undefined : this.agents.get(agentId);
+    if (!agent) return;
+    this.unregisterAgent(launchId);
+    agent.sessionId = event.session_id;
+    this.registerAgent(event.session_id, agent.id);
+  }
+
   /** Remove an agent's session mapping (called on agent removal/terminal close). */
   unregisterAgent(sessionId: string): void {
     this.sessionRouter.unregister(sessionId);
@@ -161,6 +175,7 @@ export class HookEventHandler {
     if (!normalized) return; // unknown / uninteresting event -- silently drop
     const normEvent = normalized.event;
     const eventName = event.hook_event_name; // retained for logs only
+    this.adoptLaunchedSession(event);
     // CI / e2e diagnostic: see agentStateStore.ts debugLogBroadcast comment.
     if (process.env['PIXEL_AGENTS_DEBUG_LOG']) {
       try {

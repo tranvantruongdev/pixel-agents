@@ -22,6 +22,7 @@ export const REQUIRED_PACKAGE_FILES = [
   'dist/hooks/claude-hook.js',
   'dist/bridge/pixel-agents-bridge.ts',
   'dist/hooks/codex-hook.js',
+  'dist/hooks/dsh-chat.js',
   'dist/webview/index.html',
   'icon.png',
   'package.json',
