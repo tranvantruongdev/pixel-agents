@@ -14,6 +14,7 @@ const REQUIRED_FILES = [
   'extension/dist/cli.js',
   'extension/dist/hooks/claude-hook.js',
   'extension/dist/bridge/pixel-agents-bridge.ts',
+  'extension/dist/hooks/codex-hook.js',
   'extension/dist/webview/index.html',
 ];
 const FORBIDDEN_PREFIXES = [

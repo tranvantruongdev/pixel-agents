@@ -34,8 +34,11 @@ import {
 import { FileStateAdapter } from './fileStateAdapter.js';
 import {
   claudeProvider,
+  codexProvider,
+  copyCodexHookScript,
   copyHookScript,
   hookProviderById,
+  hookProviders,
   installBridgePlugin,
   opencodeProvider,
 } from './providers/index.js';
@@ -212,6 +215,29 @@ function installBridgePluginOrReport(packageRoot: string, context = ''): boolean
   return false;
 }
 
+/** Put a provider's bundled files (hook script / bridge plugin) in place before
+ *  its installHooks runs, reporting failure. Each provider ships its own file,
+ *  so the copier is resolved by provider id rather than assuming a shared one. */
+function prepareProviderFilesOrReport(
+  providerId: string,
+  packageRoot: string,
+  context = '',
+): boolean {
+  if (providerId === claudeProvider.id) return copyHookScriptOrReport(packageRoot, context);
+  if (providerId === opencodeProvider.id) return installBridgePluginOrReport(packageRoot, context);
+  if (providerId === codexProvider.id) {
+    if (copyCodexHookScript(packageRoot)) return true;
+    console.error(
+      `[Pixel Agents] ${providerId} hooks NOT installed${context}: hook script missing.`,
+    );
+    return false;
+  }
+  // A provider with no copier installs nothing on this surface; that is a
+  // wiring bug, not a user error, so it is reported rather than ignored.
+  console.error(`[Pixel Agents] No hook script copier registered for "${providerId}".`);
+  return false;
+}
+
 // ── Main ──────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -285,18 +311,7 @@ async function main(): Promise<void> {
         // neither copy it nor be blocked by it. The OpenCode bridge plugin
         // belongs to the OpenCode provider the same way.
         grantHooksConsent(provider.id);
-        if (
-          provider.id === claudeProvider.id &&
-          !copyHookScriptOrReport(packageRoot, ' (user toggle)')
-        ) {
-          return;
-        }
-        if (
-          provider.id === opencodeProvider.id &&
-          !installBridgePluginOrReport(packageRoot, ' (user toggle)')
-        ) {
-          return;
-        }
+        if (!prepareProviderFilesOrReport(provider.id, packageRoot, ' (user toggle)')) return;
         try {
           await provider.installHooks(
             `http://127.0.0.1:${currentConfig.port}`,
@@ -407,6 +422,31 @@ async function main(): Promise<void> {
         try {
           await claudeProvider.installHooks(`http://127.0.0.1:${config.port}`, config.token);
           console.log('[Pixel Agents] Hooks installed');
+        } catch (err) {
+          console.error(`[Pixel Agents] ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      // Every OTHER bundled provider, each gated on its own consent record and
+      // presence check. Deliberately not folded into the Claude arm above:
+      // Claude carries the pre-consent migration (grant-on-already-installed)
+      // that a new provider has no history for, and a provider whose CLI is
+      // absent is skipped in SILENCE — an approval notice for a tool the user
+      // never installed is pure noise.
+      for (const provider of hookProviders) {
+        if (provider.id === claudeProvider.id) continue;
+        if (provider.isPresent?.() === false) continue;
+        if (!getHooksEnabled(provider.id)) continue;
+        if (getHooksConsent(provider.id) !== 'granted') {
+          console.log(
+            `[Pixel Agents] ${provider.displayName} hooks not installed: needs one-time approval — open the URL below to review and approve it.`,
+          );
+          continue;
+        }
+        if (!prepareProviderFilesOrReport(provider.id, packageRoot)) continue;
+        try {
+          await provider.installHooks(`http://127.0.0.1:${config.port}`, config.token);
+          console.log(`[Pixel Agents] ${provider.displayName} hooks installed`);
         } catch (err) {
           console.error(`[Pixel Agents] ${err instanceof Error ? err.message : String(err)}`);
         }
