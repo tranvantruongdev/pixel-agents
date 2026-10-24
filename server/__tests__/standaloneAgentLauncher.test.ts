@@ -8,6 +8,7 @@ import { AgentRuntime } from '../src/agentRuntime.js';
 import { AgentStateStore } from '../src/agentStateStore.js';
 import { JSONL_POLL_INTERVAL_MS } from '../src/constants.js';
 import { claudeProvider } from '../src/providers/hook/claude/claude.js';
+import { codexProvider } from '../src/providers/hook/codex/codex.js';
 import type { IPty, PtyModule, PtySpawnOptions } from '../src/terminal/ptyModule.js';
 import { PtySessionManager } from '../src/terminal/ptySessionManager.js';
 import { launchStandaloneAgent } from '../src/terminal/standaloneAgentLauncher.js';
@@ -220,6 +221,21 @@ describe('launchStandaloneAgent', () => {
     });
 
     expect(store.get(id)!.sessionId).toBe('cli-minted-session');
+  });
+
+  it('does not let a CLI the agent spawned (inherited launch id) take over the agent', () => {
+    const harness = workingPtyManager();
+    const id = launch(harness)!;
+    const launchId = store.get(id)!.sessionId;
+
+    runtime.handleHookEvent(codexProvider.id, {
+      hook_event_name: 'SessionStart',
+      session_id: 'delegated-codex-session',
+      source: 'startup',
+      pixel_agents_launch_id: launchId,
+    });
+
+    expect(store.get(id)!.sessionId).toBe(launchId);
   });
 
   it('rolls back the agent id when the PTY spawn throws', () => {
