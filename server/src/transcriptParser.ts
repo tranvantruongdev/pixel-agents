@@ -434,6 +434,9 @@ export function processTranscriptLine(
             if (!agent.hookDelivered) {
               const toolId = completedToolId;
               setTimeout(() => {
+                // The agent may be dismissed mid-delay; don't broadcast for an
+                // id the store no longer knows.
+                if (!agents.get(agentId)) return;
                 agents.broadcast({
                   type: 'agentToolDone',
                   id: agentId,

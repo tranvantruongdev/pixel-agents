@@ -90,7 +90,6 @@ export function setAgentRemovalCallback(cb: typeof agentRemovalCallback): void {
 /** Dependencies for per-agent /clear detection in readNewLines polling.
  *  Set once by ensureProjectScan; used by startFileWatching's poll loop. */
 let clearDetectionDeps: {
-  projectDir: string;
   knownJsonlFiles: Set<string>;
   activeAgentIdRef: { current: number | null };
   fileWatchers: Map<number, fs.FSWatcher>;
@@ -143,10 +142,13 @@ export function startFileWatching(
     ) {
       const deps = clearDetectionDeps;
       try {
+        // Scan the agent's OWN project dir — deps holds only the first
+        // workspace dir, so a /clear in a second multi-root folder would
+        // never be found through it.
         const dirFiles = fs
-          .readdirSync(deps.projectDir)
+          .readdirSync(agent.projectDir)
           .filter((f) => f.endsWith('.jsonl'))
-          .map((f) => path.join(deps.projectDir, f));
+          .map((f) => path.join(agent.projectDir, f));
         // Find the first untracked, non-dismissed file NOT already in knownJsonlFiles.
         // knownJsonlFiles blocks seeded files (startup) and adopted files.
         // dismissedJsonlFiles blocks old files from previous /clears.
@@ -169,8 +171,12 @@ export function startFileWatching(
           try {
             const buf = Buffer.alloc(8192);
             const fd = fs.openSync(file, 'r');
-            const bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
-            fs.closeSync(fd);
+            let bytesRead: number;
+            try {
+              bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
+            } finally {
+              fs.closeSync(fd);
+            }
             if (!buf.toString('utf-8', 0, bytesRead).includes('/clear</command-name>')) continue;
           } catch {
             continue;
@@ -218,8 +224,11 @@ export function readNewLines(
     const bytesToRead = Math.min(stat.size - agent.fileOffset, MAX_READ_BYTES);
     const buf = Buffer.alloc(bytesToRead);
     const fd = fs.openSync(agent.jsonlFile, 'r');
-    fs.readSync(fd, buf, 0, buf.length, agent.fileOffset);
-    fs.closeSync(fd);
+    try {
+      fs.readSync(fd, buf, 0, buf.length, agent.fileOffset);
+    } finally {
+      fs.closeSync(fd);
+    }
     agent.fileOffset += bytesToRead;
 
     const text = agent.lineBuffer + buf.toString('utf-8');
@@ -288,7 +297,6 @@ export function ensureProjectScan(
   // Set deps for per-agent /clear detection (only on first call)
   if (!clearDetectionDeps) {
     clearDetectionDeps = {
-      projectDir,
       knownJsonlFiles,
       activeAgentIdRef,
       fileWatchers,
@@ -1358,8 +1366,12 @@ export function scanExternalDir(
     try {
       const buf = Buffer.alloc(8192);
       const fd = fs.openSync(file, 'r');
-      const bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
-      fs.closeSync(fd);
+      let bytesRead: number;
+      try {
+        bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
+      } finally {
+        fs.closeSync(fd);
+      }
       if (buf.toString('utf-8', 0, bytesRead).includes('/clear</command-name>')) {
         if (!dismissalTracker!.hasPendingClear(file)) {
           dismissalTracker!.registerPendingClear(file);
