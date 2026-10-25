@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import type { ColorValue } from '../src/components/ui/types.js';
-import { migrateLayoutColors } from '../src/office/layout/layoutSerializer.js';
+import { layoutToTileMap, migrateLayoutColors } from '../src/office/layout/layoutSerializer.js';
 import type { OfficeLayout, PlacedFurniture, PlacedPet } from '../src/office/types.js';
 import { TileType } from '../src/office/types.js';
 
@@ -146,4 +146,37 @@ test('migrateLayoutColors is idempotent (running twice produces equivalent outpu
   assert.deepEqual(twice.pets, once.pets);
   assert.deepEqual(twice.tiles, once.tiles);
   assert.deepEqual(twice.tileColors, once.tileColors);
+});
+
+// ── Migration: tiles length repair ────────────────────────────
+// A layout from disk (hand-edited, externally watched, or written by an older
+// build) can carry a tiles array that doesn't match its declared cols×rows.
+// layoutToTileMap reads `tiles[r * cols + c]`, so a short array leaves
+// `undefined` holes that isWalkable treats as walkable phantom tiles, and the
+// mismatch survives every save round-trip unless migration repairs it.
+
+test('migrateLayoutColors pads a truncated tiles array to cols×rows with VOID', () => {
+  const layout = baseLayout({
+    tiles: new Array(4).fill(TileType.FLOOR_1) as OfficeLayout['tiles'],
+  });
+  const migrated = migrateLayoutColors(layout);
+  assert.equal(migrated.tiles.length, 12, 'tiles padded to cols×rows');
+  assert.equal(migrated.tiles[3], TileType.FLOOR_1, 'existing tiles kept');
+  assert.equal(migrated.tiles[11], TileType.VOID, 'missing tail becomes VOID');
+  assert.ok(
+    layoutToTileMap(migrated).every((row) => row.every((t) => t !== undefined)),
+    'no undefined holes in the derived tile map',
+  );
+});
+
+test('migrateLayoutColors truncates a tiles array longer than cols×rows', () => {
+  const layout = baseLayout({
+    tiles: new Array(16).fill(TileType.FLOOR_1) as OfficeLayout['tiles'],
+  });
+  const migrated = migrateLayoutColors(layout);
+  assert.equal(migrated.tiles.length, 12, 'tiles truncated to cols×rows');
+  assert.ok(
+    layoutToTileMap(migrated).every((row) => row.every((t) => t !== undefined)),
+    'no stray tiles beyond the grid',
+  );
 });

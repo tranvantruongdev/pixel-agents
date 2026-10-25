@@ -340,6 +340,21 @@ export function migrateLayoutColors(layout: OfficeLayout): OfficeLayout {
  * to the new pattern-based system. Also migrates old furniture type strings and old VOID value.
  */
 function migrateLayout(layout: OfficeLayout): OfficeLayout {
+  // Repair tiles to the declared cols×rows first — a corrupt or hand-edited
+  // layout whose tiles array doesn't match would otherwise leave `undefined`
+  // holes that layoutToTileMap reads as walkable phantom tiles, and the
+  // mismatch would survive every save round-trip.
+  const expectedTiles = layout.cols * layout.rows;
+  if (layout.tiles.length !== expectedTiles) {
+    layout = {
+      ...layout,
+      tiles: Array.from(
+        { length: expectedTiles },
+        (_, i) => layout.tiles[i] ?? (TileType.VOID as TileTypeVal),
+      ),
+    };
+  }
+
   // Migrate furniture types
   layout = { ...layout, furniture: migrateFurnitureTypes(layout.furniture) };
 
