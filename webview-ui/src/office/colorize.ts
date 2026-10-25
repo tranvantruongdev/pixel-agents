@@ -24,11 +24,18 @@ export function getColorizedSprite(
   color: ColorValue,
 ): SpriteData {
   const cached = colorizeCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    // LRU refresh: re-insert so eviction drops the least recently USED entry,
+    // not the least recently inserted one — a working set near the cap would
+    // otherwise be deleted and recomputed every frame.
+    colorizeCache.delete(cacheKey);
+    colorizeCache.set(cacheKey, cached);
+    return cached;
+  }
   const result = color.colorize ? colorizeSprite(sprite, color) : adjustSprite(sprite, color);
-  // Bounded FIFO (see SPRITE_CACHE_MAX_ENTRIES): sliders mint a key per
-  // intermediate drag value, so the oldest insert is dropped past the cap and
-  // recomputed on demand if a live color asks for it again.
+  // Bounded LRU (see SPRITE_CACHE_MAX_ENTRIES): sliders mint a key per
+  // intermediate drag value, so the least recently used entry is dropped past
+  // the cap and recomputed on demand if a live color asks for it again.
   if (colorizeCache.size >= SPRITE_CACHE_MAX_ENTRIES) {
     const oldest = colorizeCache.keys().next().value;
     if (oldest !== undefined) colorizeCache.delete(oldest);

@@ -247,7 +247,13 @@ function getDualColorizedCarpetSprite(
   accentColor: ColorValue,
 ): SpriteData | null {
   const cached = carpetCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    // LRU refresh (see SPRITE_CACHE_MAX_ENTRIES): re-insert on hit so eviction
+    // drops the least recently used entry, not the least recently inserted.
+    carpetCache.delete(cacheKey);
+    carpetCache.set(cacheKey, cached);
+    return cached;
+  }
 
   if (!palette.mainRgb) return null;
 
@@ -260,10 +266,10 @@ function getDualColorizedCarpetSprite(
   const accentLayer = flatColorizeSprite(accentMask, accentColor);
 
   const merged = mergeCarpetLayers(mainLayer, accentLayer);
-  // Bounded FIFO (see SPRITE_CACHE_MAX_ENTRIES): the carpet colour sliders
-  // mint a key pair per intermediate drag value, so the oldest insert is
-  // dropped past the cap and recomputed on demand if a live color asks for
-  // it again.
+  // Bounded LRU (see SPRITE_CACHE_MAX_ENTRIES): the carpet colour sliders
+  // mint a key pair per intermediate drag value, so the least recently used
+  // entry is dropped past the cap and recomputed on demand if a live color
+  // asks for it again.
   if (carpetCache.size >= SPRITE_CACHE_MAX_ENTRIES) {
     const oldest = carpetCache.keys().next().value;
     if (oldest !== undefined) carpetCache.delete(oldest);

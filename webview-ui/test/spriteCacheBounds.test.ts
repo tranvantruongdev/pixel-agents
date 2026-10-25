@@ -22,7 +22,7 @@ import type { ColorValue } from '../src/components/ui/types.js';
 import { CARPET_DEFAULT_ACCENT_COLOR, SPRITE_CACHE_MAX_ENTRIES } from '../src/constants.js';
 import { clearColorizeCache, getColorizedSprite } from '../src/office/colorize.js';
 import { getCarpetJunctionSprite, setCarpetSprites } from '../src/office/sprites/carpetTiles.js';
-import { getCharacterSprites } from '../src/office/sprites/spriteData.js';
+import { getCharacterSprites, setCharacterTemplates } from '../src/office/sprites/spriteData.js';
 import type { SpriteData } from '../src/office/types.js';
 
 /** Distinct keys minted past the cap — enough over to prove the oldest entry
@@ -84,5 +84,70 @@ describe('sprite cache bounds', () => {
       getCharacterSprites(0, i + 2);
     }
     expect(getCharacterSprites(0, 1)).not.toBe(first);
+  });
+});
+
+/**
+ * A layout's live working set (per-cell floor/wall colors, carpet palettes,
+ * per-instance furniture colors) can exceed half the cap, and those keys are
+ * asked for again every frame while colour sliders mint a fresh key per
+ * intermediate drag value. Eviction must follow recency of USE, not of
+ * insertion (LRU): a key re-hit between churn batches keeps its cached
+ * identity, while the never-reused churn keys are the ones dropped —
+ * otherwise a working set near the cap is deleted and recomputed every frame.
+ */
+describe('sprite cache LRU', () => {
+  const HALF_CAP = SPRITE_CACHE_MAX_ENTRIES / 2;
+
+  it('colorizeCache keeps a re-hit entry when churn mints more keys than the cap', () => {
+    clearColorizeCache();
+    const sprite: SpriteData = [['#FF0000']];
+    const live = (i: number) => getColorizedSprite(`live${i}`, sprite, colorOf(i));
+    for (let i = 0; i < HALF_CAP; i++) live(i);
+    const hot = live(0);
+    // Slider drag: one fresh key per intermediate value, more than the whole
+    // cap, with the working set still rendered between the batches.
+    for (let i = 0; i < SPRITE_CACHE_MAX_ENTRIES + 1; i++) {
+      getColorizedSprite(`churn${i}`, sprite, colorOf((i % 300) + 20));
+      live(0);
+    }
+    expect(live(0)).toBe(hot);
+  });
+
+  it('carpetCache keeps a re-hit entry when colour churn exceeds the cap', () => {
+    const base: SpriteData = [
+      ['#111111', '#EEEEEE'],
+      ['#111111', '#EEEEEE'],
+    ];
+    setCarpetSprites([Array.from({ length: 16 }, () => base)]);
+    const carpetTiles: Array<{ variant: number; color: ColorValue } | null> = new Array(9).fill(
+      null,
+    );
+    const junction = (i: number) => {
+      const color = colorOf(i);
+      carpetTiles[4] = { variant: 0, color };
+      return getCarpetJunctionSprite(1, 1, 0, carpetTiles, 3, 3, color, CARPET_DEFAULT_ACCENT_COLOR);
+    };
+    for (let i = 0; i < HALF_CAP; i++) junction(i);
+    const hot = junction(0);
+    for (let i = 0; i < SPRITE_CACHE_MAX_ENTRIES + 1; i++) {
+      junction(i + SPRITE_CACHE_MAX_ENTRIES);
+      junction(0);
+    }
+    expect(junction(0)).toBe(hot);
+  });
+
+  it('character spriteCache keeps a re-hit agent when churn mints more keys than the cap', () => {
+    // Synthetic 1x1 templates keep the misses cheap (7 frames per direction:
+    // 3 walk + 2 typing + 2 reading); distinct palette indexes mint distinct
+    // keys through the same public API as live agents.
+    const frames = () => Array.from({ length: 7 }, () => [['#FF0000']] as SpriteData);
+    setCharacterTemplates([{ down: frames(), up: frames(), right: frames() }]);
+    const hot = getCharacterSprites(0, 0);
+    for (let i = 0; i < SPRITE_CACHE_MAX_ENTRIES + 1; i++) {
+      getCharacterSprites(i + 1, 0);
+      getCharacterSprites(0, 0);
+    }
+    expect(getCharacterSprites(0, 0)).toBe(hot);
   });
 });

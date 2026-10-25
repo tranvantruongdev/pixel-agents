@@ -567,9 +567,10 @@ export const KEYBOARD_MIN_HEIGHT_PX = 150;
 export const MAX_PENDING_CLIENT_MESSAGES = 1000;
 
 /** Cap on the sprite-recolor caches (colorize / carpet tiles / character
- *  hues). Colour sliders mint a fresh key per intermediate drag value and
- *  every agent past the first palette round gets a random hue shift, so an
- *  unbounded cache grows for the whole session; past the cap the oldest
- *  insert is dropped and recomputed on demand. A layout's working set of
- *  live colors sits far below this. */
-export const SPRITE_CACHE_MAX_ENTRIES = 512;
+ *  hues), evicted least-recently-used past the bound. Must exceed a layout's
+ *  worst-case live working set, or every frame recomputes: 64×64 grid gives
+ *  ≤4096 floor+wall keys (one tile per cell) + ≤4096 carpet junction keys +
+ *  ≤4096 furniture keys (one instance per cell) + ~100 live-character hue
+ *  keys ≈ 12 400. The cap still bounds the colour sliders, which mint a
+ *  fresh key per intermediate drag value. */
+export const SPRITE_CACHE_MAX_ENTRIES = 16_384;

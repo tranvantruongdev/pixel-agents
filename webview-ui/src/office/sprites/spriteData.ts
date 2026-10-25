@@ -118,7 +118,13 @@ function emptySprite(w: number, h: number): SpriteData {
 export function getCharacterSprites(paletteIndex: number, hueShift = 0): CharacterSprites {
   const cacheKey = `${paletteIndex}:${hueShift}`;
   const cached = spriteCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    // LRU refresh (see SPRITE_CACHE_MAX_ENTRIES): re-insert on hit so eviction
+    // drops the least recently used entry, not the least recently inserted.
+    spriteCache.delete(cacheKey);
+    spriteCache.set(cacheKey, cached);
+    return cached;
+  }
 
   let sprites: CharacterSprites;
 
@@ -182,9 +188,10 @@ export function getCharacterSprites(paletteIndex: number, hueShift = 0): Charact
     sprites = hueShiftSprites(sprites, hueShift);
   }
 
-  // Bounded FIFO (see SPRITE_CACHE_MAX_ENTRIES): every agent past the first
-  // palette round gets a random hue shift of its own, so the oldest insert is
-  // dropped past the cap and recomputed on demand if its agent is still live.
+  // Bounded LRU (see SPRITE_CACHE_MAX_ENTRIES): every agent past the first
+  // palette round gets a random hue shift of its own, so the least recently
+  // used entry is dropped past the cap and recomputed on demand if its agent
+  // is still live.
   if (spriteCache.size >= SPRITE_CACHE_MAX_ENTRIES) {
     const oldest = spriteCache.keys().next().value;
     if (oldest !== undefined) spriteCache.delete(oldest);
