@@ -42,6 +42,7 @@ import {
   VOID_TILE_DASH_PATTERN,
   VOID_TILE_OUTLINE_COLOR,
 } from '../../constants.js';
+import { getColorizeGeneration } from '../colorize.js';
 import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles.js';
 import { mapOffset } from '../projection.js';
 import {
@@ -340,6 +341,77 @@ export function renderAreaLabels(
   ctx.restore();
 }
 
+// ── Tile-grid draw list ─────────────────────────────────────────
+// Resolving a tile's drawable (colorized floor sprite via string key + object
+// spread + colorize-cache ops, or the wall's flat color) is a pure function of
+// (tileMap, tileColors, cols) — all replaced immutably on layout edits
+// (rebuildFromLayout) — plus the colorize generation, which bumps when floor
+// sprites reload. Memoize per tile so the per-frame loop is fillRect/drawImage
+// only.
+
+/** Per-tile drawable: a colorized floor sprite, or a solid fill color. */
+interface TileDrawEntry {
+  sprite?: SpriteData;
+  fill?: string;
+}
+
+let tileGridCache: {
+  tileMap: TileTypeVal[][];
+  tileColors: Array<ColorValue | null> | undefined;
+  cols: number | undefined;
+  generation: number;
+  entries: Array<TileDrawEntry | null>;
+} | null = null;
+
+function getTileGridEntries(
+  tileMap: TileTypeVal[][],
+  tileColors: Array<ColorValue | null> | undefined,
+  layoutCols: number | undefined,
+): Array<TileDrawEntry | null> {
+  const generation = getColorizeGeneration();
+  if (
+    tileGridCache &&
+    tileGridCache.tileMap === tileMap &&
+    tileGridCache.tileColors === tileColors &&
+    tileGridCache.cols === layoutCols &&
+    tileGridCache.generation === generation
+  ) {
+    return tileGridCache.entries;
+  }
+
+  const tmRows = tileMap.length;
+  const tmCols = tmRows > 0 ? tileMap[0].length : 0;
+  const cols = layoutCols ?? tmCols;
+  const entries: Array<TileDrawEntry | null> = new Array(tmRows * tmCols).fill(null);
+  for (let r = 0; r < tmRows; r++) {
+    for (let c = 0; c < tmCols; c++) {
+      const tile = tileMap[r][c];
+
+      // Skip VOID tiles entirely (transparent)
+      if (tile === TileType.VOID) continue;
+
+      const colorIdx = r * cols + c;
+      if (tile === TileType.WALL || !hasFloorSprites()) {
+        // Wall tiles or fallback: solid color
+        if (tile === TileType.WALL) {
+          const wallColor = tileColors?.[colorIdx];
+          entries[colorIdx] = { fill: wallColor ? wallColorToHex(wallColor) : WALL_COLOR };
+        } else {
+          entries[colorIdx] = { fill: FALLBACK_FLOOR_COLOR };
+        }
+        continue;
+      }
+
+      // Floor tile: colorized sprite
+      const color = tileColors?.[colorIdx] ?? { h: 0, s: 0, b: 0, c: 0 };
+      entries[colorIdx] = { sprite: getColorizedFloorSprite(tile, color) };
+    }
+  }
+
+  tileGridCache = { tileMap, tileColors, cols: layoutCols, generation, entries };
+  return entries;
+}
+
 /** @internal */
 export function renderTileGrid(
   ctx: CanvasRenderingContext2D,
@@ -351,37 +423,30 @@ export function renderTileGrid(
   cols?: number,
 ): void {
   const s = TILE_SIZE * zoom;
-  const useSpriteFloors = hasFloorSprites();
   const tmRows = tileMap.length;
   const tmCols = tmRows > 0 ? tileMap[0].length : 0;
   const layoutCols = cols ?? tmCols;
+  const entries = getTileGridEntries(tileMap, tileColors, cols);
 
   // Floor tiles + wall base color
   for (let r = 0; r < tmRows; r++) {
+    const row = tileMap[r];
     for (let c = 0; c < tmCols; c++) {
-      const tile = tileMap[r][c];
+      const tile = row[c];
 
       // Skip VOID tiles entirely (transparent)
       if (tile === TileType.VOID) continue;
 
-      if (tile === TileType.WALL || !useSpriteFloors) {
-        // Wall tiles or fallback: solid color
-        if (tile === TileType.WALL) {
-          const colorIdx = r * layoutCols + c;
-          const wallColor = tileColors?.[colorIdx];
-          ctx.fillStyle = wallColor ? wallColorToHex(wallColor) : WALL_COLOR;
-        } else {
-          ctx.fillStyle = FALLBACK_FLOOR_COLOR;
-        }
+      const entry = entries[r * layoutCols + c];
+      if (!entry) continue;
+      if (entry.fill !== undefined) {
+        ctx.fillStyle = entry.fill;
         ctx.fillRect(offsetX + c * s, offsetY + r * s, s, s);
         continue;
       }
 
-      // Floor tile: get colorized sprite
-      const colorIdx = r * layoutCols + c;
-      const color = tileColors?.[colorIdx] ?? { h: 0, s: 0, b: 0, c: 0 };
-      const sprite = getColorizedFloorSprite(tile, color);
-      const cached = getCachedSprite(sprite, zoom);
+      // Floor tile: draw the cached colorized sprite
+      const cached = getCachedSprite(entry.sprite!, zoom);
       ctx.drawImage(cached, offsetX + c * s, offsetY + r * s);
     }
   }

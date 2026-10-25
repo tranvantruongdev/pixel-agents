@@ -13,6 +13,14 @@ import type { SpriteData } from './types.js';
 /** Generic colorized sprite cache: arbitrary string key → SpriteData */
 const colorizeCache = new Map<string, SpriteData>();
 
+/** Bumped by clearColorizeCache (asset reloads) — per-layout draw memos that
+ *  hold colorized results must rebuild when cached sprites are dropped. */
+let generation = 0;
+
+export function getColorizeGeneration(): number {
+  return generation;
+}
+
 /**
  * Get a color-adjusted sprite from cache, or compute and cache it.
  * Dispatches to colorize or adjust mode based on `color.colorize`.
@@ -47,6 +55,7 @@ export function getColorizedSprite(
 /** Clear all cached colorized sprites (e.g., on asset reload) */
 export function clearColorizeCache(): void {
   colorizeCache.clear();
+  generation++;
 }
 
 /**
