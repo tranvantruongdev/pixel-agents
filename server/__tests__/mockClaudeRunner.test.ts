@@ -11,7 +11,12 @@ let tmpHome: string;
 let workspaceDir: string;
 
 function makeNodeCommand(scriptPath: string): string {
-  return `${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`;
+  // Shell-quote only, never JSON.stringify: the settings writer JSON-encodes
+  // whatever lands here, so a JSON.stringify would double every backslash.
+  // The runner's isPixelAgentsHookCommand then sees "C:\\Users\\…" (two
+  // backslashes per separator), matches nothing, and skips the hook — on
+  // POSIX there are no backslashes, which is why CI never caught it.
+  return `node "${scriptPath}"`;
 }
 
 function writeHookScript(scriptPath: string, outputPath: string): void {
@@ -53,7 +58,10 @@ function runMockClaude(
       cwd: workspaceDir,
       env: {
         ...process.env,
+        // Both, always: os.homedir() in the child reads USERPROFILE on
+        // Windows and ignores HOME (same reason claude-hook.test.ts sets both).
         HOME: tmpHome,
+        USERPROFILE: tmpHome,
       },
       stdio: ['ignore', 'ignore', 'pipe'],
     });

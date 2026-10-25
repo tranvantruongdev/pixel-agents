@@ -15,6 +15,21 @@ import {
   validateDirectoryPath,
 } from '../src/directories.js';
 
+/** os.homedir() reads USERPROFILE on Windows and ignores HOME, so both must be
+ *  redirected or `~` expands to the real home and the dirs under test don't
+ *  exist. Returns the matching restore for afterEach. */
+function isolateHomeEnv(tmpHome: string): () => void {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = tmpHome;
+  process.env.USERPROFILE = tmpHome;
+  return () => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+}
+
 /**
  * The shared Directory module both hosts drive. Everything here goes through the
  * real shared config file, with $HOME redirected to a fresh temp dir per test —
@@ -22,15 +37,14 @@ import {
  */
 describe('directories', () => {
   let tempHome: string;
-  let originalHome: string | undefined;
+  let restoreHomeEnv: () => void;
   /** Real directories on disk to point Directories at. */
   let alpha: string;
   let beta: string;
 
   beforeEach(() => {
     tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-dirs-test-')));
-    originalHome = process.env.HOME;
-    process.env.HOME = tempHome;
+    restoreHomeEnv = isolateHomeEnv(tempHome);
     alpha = path.join(tempHome, 'alpha');
     beta = path.join(tempHome, 'beta');
     fs.mkdirSync(alpha);
@@ -38,11 +52,7 @@ describe('directories', () => {
   });
 
   afterEach(() => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    restoreHomeEnv();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 

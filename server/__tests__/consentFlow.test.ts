@@ -24,6 +24,21 @@ function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
+/** os.homedir() reads USERPROFILE on Windows and ignores HOME, so both must be
+ *  redirected or the adapter under test writes to the real home. Returns the
+ *  matching restore for afterEach. */
+function isolateHomeEnv(tmpHome: string): () => void {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = tmpHome;
+  process.env.USERPROFILE = tmpHome;
+  return () => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+}
+
 /**
  * The in-app first-run consent flow through the standalone dispatch: the server asks over the wire during the
  * webviewReady handshake and acts on the answer via the shared modules (consentGate decides, consentExecutor
@@ -32,7 +47,7 @@ function settle(): Promise<void> {
  */
 describe('clientMessageHandler: hooks consent flow', () => {
   let tempHome: string;
-  let originalHome: string | undefined;
+  let restoreHomeEnv: () => void;
   let store: AgentStateStore;
   let sent: Array<Record<string, unknown>>;
   let ctx: ClientMessageContext;
@@ -75,8 +90,7 @@ describe('clientMessageHandler: hooks consent flow', () => {
 
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-consent-flow-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = tempHome;
+    restoreHomeEnv = isolateHomeEnv(tempHome);
 
     store = new AgentStateStore();
     store.setAdapter(new FileStateAdapter({ namespace: 'standalone' }));
@@ -85,11 +99,7 @@ describe('clientMessageHandler: hooks consent flow', () => {
   });
 
   afterEach(() => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    restoreHomeEnv();
     store.dispose();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });

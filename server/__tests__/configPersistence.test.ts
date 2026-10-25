@@ -18,22 +18,32 @@ import {
   writeConfig,
 } from '../src/configPersistence.js';
 
+/** os.homedir() reads USERPROFILE on Windows and ignores HOME, so both must be
+ *  redirected or the config under test is the real home's. Returns the
+ *  matching restore for afterEach. */
+function isolateHomeEnv(tmpHome: string): () => void {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = tmpHome;
+  process.env.USERPROFILE = tmpHome;
+  return () => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+}
+
 describe('configPersistence: areas', () => {
   let tempHome: string;
-  let originalHome: string | undefined;
+  let restoreHomeEnv: () => void;
 
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-config-test-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = tempHome;
+    restoreHomeEnv = isolateHomeEnv(tempHome);
   });
 
   afterEach(() => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    restoreHomeEnv();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 

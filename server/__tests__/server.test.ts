@@ -289,7 +289,11 @@ describe('PixelAgentsServer', () => {
     const rotated = await server.start({ embedded: false, rotateToken: true });
     expect(rotated.token).not.toBe(first.token);
     expect(fs.readFileSync(tokenFile, 'utf-8').trim()).toBe(rotated.token);
-    expect(fs.statSync(tokenFile).mode & 0o777).toBe(0o600);
+    // Windows has no permission bits beyond the read-only flag — every normal
+    // file reports 0o666 — so only POSIX can pin the 0o600 the write asked for.
+    expect(fs.statSync(tokenFile).mode & 0o777).toBe(
+      process.platform === 'win32' ? 0o666 : 0o600,
+    );
   });
 
   it('rotateToken refuses while a standalone server is running', async () => {

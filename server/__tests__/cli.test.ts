@@ -454,7 +454,16 @@ describe('dist/cli.js entry-point guard', () => {
         string,
         unknown
       >;
-      expect(JSON.stringify(settings)).toContain(installedHook);
+      // Compare against the PARSED command, not the JSON text: on Windows the
+      // file escapes every backslash, so the raw path never appears inside
+      // JSON.stringify output.
+      type HookSettings = {
+        hooks?: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+      };
+      const commands = Object.values((settings as HookSettings).hooks ?? {}).flatMap((entries) =>
+        entries.flatMap((e) => e.hooks.map((h) => h.command)),
+      );
+      expect(commands.some((c) => c.includes(installedHook))).toBe(true);
     } finally {
       await stopChild(child);
       fs.rmSync(tmpHome, { recursive: true, force: true });

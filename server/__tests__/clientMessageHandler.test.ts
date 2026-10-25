@@ -25,6 +25,21 @@ function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
+/** os.homedir() reads USERPROFILE on Windows and ignores HOME, so both must be
+ *  redirected or the adapter under test writes to the real home. Returns the
+ *  matching restore for afterEach. */
+function isolateHomeEnv(tmpHome: string): () => void {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = tmpHome;
+  process.env.USERPROFILE = tmpHome;
+  return () => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+}
+
 function createTestAgent(overrides: Partial<AgentState> = {}): AgentState {
   return {
     id: 1,
@@ -62,7 +77,7 @@ function createTestAgent(overrides: Partial<AgentState> = {}): AgentState {
  */
 describe('clientMessageHandler: areas + carpet wire ordering', () => {
   let tempHome: string;
-  let originalHome: string | undefined;
+  let restoreHomeEnv: () => void;
   let store: AgentStateStore;
   let sent: Array<Record<string, unknown>>;
   let ctx: ClientMessageContext;
@@ -75,8 +90,7 @@ describe('clientMessageHandler: areas + carpet wire ordering', () => {
 
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-cmh-test-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = tempHome;
+    restoreHomeEnv = isolateHomeEnv(tempHome);
 
     store = new AgentStateStore();
     store.setAdapter(new FileStateAdapter({ namespace: 'standalone' }));
@@ -85,11 +99,7 @@ describe('clientMessageHandler: areas + carpet wire ordering', () => {
   });
 
   afterEach(() => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    restoreHomeEnv();
     store.dispose();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
@@ -431,7 +441,7 @@ describe('clientMessageHandler: areas + carpet wire ordering', () => {
 
 describe('clientMessageHandler: saveAgentSeats palette sync', () => {
   let tempHome: string;
-  let originalHome: string | undefined;
+  let restoreHomeEnv: () => void;
   let store: AgentStateStore;
   let sent: Array<Record<string, unknown>>;
   let ctx: ClientMessageContext;
@@ -444,8 +454,7 @@ describe('clientMessageHandler: saveAgentSeats palette sync', () => {
 
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-cmh-seats-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = tempHome;
+    restoreHomeEnv = isolateHomeEnv(tempHome);
 
     store = new AgentStateStore();
     store.setAdapter(new FileStateAdapter({ namespace: 'standalone' }));
@@ -454,11 +463,7 @@ describe('clientMessageHandler: saveAgentSeats palette sync', () => {
   });
 
   afterEach(() => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    restoreHomeEnv();
     store.dispose();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
@@ -623,7 +628,7 @@ describe('clientMessageHandler: saveAgentSeats palette sync', () => {
  */
 describe('clientMessageHandler: standalone terminal control plane', () => {
   let tempHome: string;
-  let originalHome: string | undefined;
+  let restoreHomeEnv: () => void;
   let store: AgentStateStore;
   let runtime: AgentRuntime;
   let sent: Array<Record<string, unknown>>;
@@ -703,8 +708,7 @@ describe('clientMessageHandler: standalone terminal control plane', () => {
 
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-cmh-term-test-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = tempHome;
+    restoreHomeEnv = isolateHomeEnv(tempHome);
 
     store = new AgentStateStore();
     store.setAdapter(new FileStateAdapter({ namespace: 'standalone' }));
@@ -715,11 +719,7 @@ describe('clientMessageHandler: standalone terminal control plane', () => {
   });
 
   afterEach(() => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    restoreHomeEnv();
     runtime.dispose();
     store.dispose();
     fs.rmSync(tempHome, { recursive: true, force: true });
@@ -1185,21 +1185,20 @@ describe('clientMessageHandler: standalone terminal control plane', () => {
  */
 describe('clientMessageHandler: read-only (untokened) clients', () => {
   let tempHome: string;
-  let originalHome: string | undefined;
+  let restoreHomeEnv: () => void;
   let store: AgentStateStore;
   let sent: Array<Record<string, unknown>>;
 
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-cmh-readonly-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = tempHome;
+    restoreHomeEnv = isolateHomeEnv(tempHome);
     store = new AgentStateStore();
     store.setAdapter(new FileStateAdapter({ namespace: 'standalone' }));
     sent = [];
   });
 
   afterEach(() => {
-    process.env.HOME = originalHome;
+    restoreHomeEnv();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
