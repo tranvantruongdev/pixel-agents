@@ -729,6 +729,11 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
               hooksEnabled: getHooksEnabled(provider.id),
               consentAnswered: getHooksConsent(provider.id) !== 'unanswered',
               privileged: true,
+              // Same isPresent retirement the standalone handshake applies
+              // (clientMessageHandler.ts): an uninstalled CLI cannot be evaluated
+              // by the user, so without this every fresh profile gets asks (and
+              // an Intro greeter character) for CLIs it does not have.
+              present: provider.isPresent?.() ?? true,
             },
             provider,
           );
