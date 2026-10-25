@@ -38,7 +38,9 @@ export function attachClipboardInput(
       // the plain-http fallback needs; the selection goes once it landed.
       ev.preventDefault();
       if (term.hasSelection()) {
-        const startCol = (term.getSelectionPosition()?.start.x ?? 1) - 1;
+        // 0-based, like select() itself and the touch path's cells; feeding
+        // flowCopy one column short flips boundary wrap decisions.
+        const startCol = term.getSelectionPosition()?.start.x ?? 0;
         const mode = action === 'copy' ? 'verbatim' : 'text';
         const text = terminalCopyText(term.getSelection(), mode, term.cols, startCol);
         void writeClipboardText(text).then((ok) => {
