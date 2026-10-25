@@ -323,18 +323,39 @@ export interface ExternalClaudeSpawn {
 const trackedExternalProcesses = new Set<ChildProcess>();
 
 /** Kill any mock-claude processes spawned via spawnExternalClaudeScenario
- *  that are still alive. Called from the test fixture's teardown. */
+ *  that are still alive. Called from the test fixture's teardown, and from the
+ *  standalone session cleanup BEFORE its workspace directory is deleted: a
+ *  runner still booting under load holds its spawn cwd, and rmdir over a live
+ *  process's working directory fails with EPERM on Windows. */
 export async function killTrackedExternalProcesses(): Promise<void> {
-  for (const child of trackedExternalProcesses) {
-    if (child.exitCode === null && child.signalCode === null) {
-      try {
+  const alive = [...trackedExternalProcesses].filter(
+    (child) => child.exitCode === null && child.signalCode === null,
+  );
+  trackedExternalProcesses.clear();
+  if (alive.length === 0) return;
+
+  for (const child of alive) {
+    try {
+      if (process.platform === 'win32' && child.pid) {
+        // shell:true spawns cmd.exe wrapping the node runner; TerminateProcess
+        // on cmd orphans the runner (which keeps its cwd), so kill the tree.
+        spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      } else {
         child.kill('SIGTERM');
-      } catch {
-        // Process may already be gone; ignore.
       }
+    } catch {
+      // Process may already be gone; ignore.
     }
   }
-  trackedExternalProcesses.clear();
+  // The killed processes' cwd handles release only once they are fully dead;
+  // give the exits a bounded moment before a caller deletes directories.
+  await Promise.race([
+    Promise.all(
+      alive.map((child) => new Promise<void>((resolve) => child.once('exit', () => resolve()))),
+    ),
+    sleep(3_000),
+  ]);
+  await sleep(250);
 }
 
 export async function spawnExternalClaudeScenario(options: {

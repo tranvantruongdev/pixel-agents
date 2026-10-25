@@ -7,6 +7,7 @@ import path from 'node:path';
 import { expect, type Page } from '@playwright/test';
 
 import { type HookServerConfig, waitForHookServer } from './hooks';
+import { killTrackedExternalProcesses } from './mock-claude';
 
 const REPO_ROOT = path.join(__dirname, '../..');
 const STANDALONE_CLI = path.resolve(REPO_ROOT, 'dist', 'cli.js');
@@ -375,6 +376,9 @@ export async function launchStandalone(
       },
       cleanup: async () => {
         await stopProcess(hostProcess);
+        // External mock-claude sessions may still be alive (their scenario
+        // holds the workspace as its cwd) — remove them before the rmSyncs.
+        await killTrackedExternalProcesses();
         if (ownsHome) fs.rmSync(tmpHome, { recursive: true, force: true });
         if (ownsWorkspace) fs.rmSync(workspaceDir, { recursive: true, force: true });
       },
