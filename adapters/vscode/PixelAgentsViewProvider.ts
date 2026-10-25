@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -1161,6 +1162,24 @@ function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): s
     const webviewUri = webview.asWebviewUri(fileUri);
     return `${attr}="${webviewUri}"`;
   });
+
+  // Nonce-scoped CSP: the webview runs untrusted-ish content (agent tool
+  // status lines, transcript fragments reach the DOM), so a markup-injection
+  // bug gets no script execution as a second move. Inline STYLES stay open —
+  // React sets style attributes — but inline SCRIPTS are impossible: the Vite
+  // build loads exactly one module script, and only the nonce lets it run.
+  const nonce = crypto.randomBytes(16).toString('base64');
+  const csp = [
+    `default-src 'none'`,
+    `script-src 'nonce-${nonce}'`,
+    `style-src ${webview.cspSource} 'unsafe-inline'`,
+    `img-src ${webview.cspSource} data: blob:`,
+    `font-src ${webview.cspSource}`,
+    `connect-src ${webview.cspSource}`,
+  ].join('; ');
+  html = html
+    .replace(/<head([^>]*)>/i, (_m, headAttrs) => `<head${headAttrs}><meta http-equiv="Content-Security-Policy" content="${csp}">`)
+    .replace(/<script(?![^>]*\snonce=)/g, `<script nonce="${nonce}"`);
 
   return html;
 }
