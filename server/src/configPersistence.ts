@@ -350,10 +350,37 @@ export function writeConfig(config: PixelAgentsConfig): boolean {
     const json = JSON.stringify(config, null, 2);
     const tmpPath = filePath + '.tmp';
     fs.writeFileSync(tmpPath, json, 'utf-8');
-    fs.renameSync(tmpPath, filePath);
+    renameConfigIntoPlace(tmpPath, filePath);
     return true;
   } catch (err) {
     console.error('[Pixel Agents] Failed to write config file:', err);
     return false;
+  }
+}
+
+const RENAME_ATTEMPTS = 5;
+const RENAME_RETRY_DELAY_MS = 40;
+
+/**
+ * Move the freshly written tmp file over the config, absorbing Windows'
+ * transient rename failures: a concurrent reader (real-time antivirus, search
+ * indexer, another process's readFileSync) holding the destination for
+ * microseconds makes renameSync fail with EPERM/EACCES even though the handle
+ * closes immediately after. A rename lost to that race silently drops the
+ * write — a hooks-consent grant among them — so retry those two codes briefly
+ * before giving up; anything else is a real error and fails on the first try.
+ */
+function renameConfigIntoPlace(from: string, to: string): void {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (attempt >= RENAME_ATTEMPTS || (code !== 'EPERM' && code !== 'EACCES')) {
+        throw err;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RENAME_RETRY_DELAY_MS);
+    }
   }
 }

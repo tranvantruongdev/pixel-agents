@@ -1,7 +1,9 @@
+import { spawn } from 'node:child_process';
+
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   clearHooksAnswer,
@@ -354,5 +356,63 @@ describe('configPersistence: areas', () => {
       expect(reloaded.vscode.areaMappings).toEqual({ frontend: ['Engineering'] });
       expect(reloaded.standalone.areaMappings).toEqual({});
     });
+  });
+});
+
+describe('configPersistence: writeConfig transient rename failures', () => {
+  let tempHome: string;
+  let restoreHomeEnv: () => void;
+
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-config-test-'));
+    restoreHomeEnv = isolateHomeEnv(tempHome);
+  });
+
+  afterEach(() => {
+    restoreHomeEnv();
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  // libuv opens files with FILE_SHARE_DELETE, so no in-process handle can block
+  // our own rename — the transient EPERM this retries only comes from outside
+  // (antivirus, indexer). A .NET FileStream with FileShare.None reproduces it;
+  // nothing equivalent exists on POSIX, hence the platform gate.
+  describe.skipIf(process.platform !== 'win32')('Windows destination lock', () => {
+    it('lands the write once the destination lock clears mid-retry', async () => {
+      const configPath = path.join(tempHome, '.pixel-agents', 'config.json');
+      const markerPath = path.join(tempHome, 'lock-acquired.marker');
+      // Baseline write so the locker has a file to open.
+      expect(writeConfig(readConfig())).toBe(true);
+
+      const p = (value: string) => value.replace(/\\/g, '\\\\');
+      const locker = spawn(
+        'powershell',
+        [
+          '-NoProfile',
+          '-Command',
+          `$fs = [System.IO.File]::Open('${p(configPath)}', 'Open', 'ReadWrite', 'None');` +
+            `Set-Content -Path '${p(markerPath)}' -Value locked;` +
+            'Start-Sleep -Milliseconds 60;' +
+            '$fs.Close()',
+        ],
+        { stdio: 'ignore' },
+      );
+
+      try {
+        await vi.waitFor(() => expect(fs.existsSync(markerPath)).toBe(true), {
+          timeout: 5_000,
+          interval: 10,
+        });
+
+        // First rename hits EPERM under the held lock; the retries outlast it.
+        const cfg = readConfig();
+        cfg.vscode.showAreas = true;
+        expect(writeConfig(cfg)).toBe(true);
+        expect(readConfig().vscode.showAreas).toBe(true);
+      } finally {
+        locker.kill();
+        await new Promise<void>((resolve) => locker.once('exit', () => resolve()));
+      }
+    }, 15_000);
   });
 });
