@@ -48,7 +48,7 @@ import {
   setHookProvider,
   setTeamSwitchCallback,
 } from './transcriptParser.js';
-import type { AgentState } from './types.js';
+import type { AgentState, PersistedAgent } from './types.js';
 
 /** Callbacks that adapters register for platform-specific behavior. */
 export interface RuntimeLifecycleCallbacks {
@@ -487,6 +487,7 @@ export class AgentRuntime {
     let maxId = 0;
 
     for (const p of persisted) {
+      if (!isRestorablePersistedAgent(p)) continue;
       if (!p.isExternal) continue;
       // Background-spawn children (a leadAgentId but no teamName) are derived
       // state: the 1s scan re-materializes them from sidecars while their spawn
@@ -512,7 +513,9 @@ export class AgentRuntime {
         jsonlFile: p.jsonlFile,
         // Live spawn ids survive the restart so the 1s scan can re-adopt the
         // spawns' transcripts and the completion queue-op still matches.
-        backgroundAgentToolIds: new Set(p.backgroundAgentToolIds ?? []),
+        backgroundAgentToolIds: new Set(
+          Array.isArray(p.backgroundAgentToolIds) ? p.backgroundAgentToolIds : [],
+        ),
         directoryName: p.directoryName ?? p.folderName,
         teamName: p.teamName,
         agentName: p.agentName,
@@ -582,4 +585,15 @@ export class AgentRuntime {
       this.removeAgent(id);
     }
   }
+}
+
+/** The state file is external input (FileStateAdapter.loadAgents casts its rows
+ *  without validating them): a row must carry a usable identity before
+ *  restoreExternalAgents may act on it. Rows without one are skipped — a throw
+ *  here escapes to the /ws message handler's catch-all and silently ends the
+ *  webviewReady handshake with an empty office. */
+function isRestorablePersistedAgent(value: unknown): value is PersistedAgent {
+  if (typeof value !== 'object' || value === null) return false;
+  const p = value as Record<string, unknown>;
+  return Number.isSafeInteger(p['id']) && typeof p['jsonlFile'] === 'string';
 }
