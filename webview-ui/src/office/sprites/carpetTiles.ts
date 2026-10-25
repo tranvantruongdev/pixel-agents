@@ -27,6 +27,13 @@ import type { CarpetTile, SpriteData } from '../types.js';
 /** `carpetSets[variant][msCase] = SpriteData` — 16 marching-squares cases per variant. */
 let carpetSets: SpriteData[][] = [];
 
+/** Bumped on every setCarpetSprites — memoized carpet draw lists must rebuild. */
+let spriteVersion = 0;
+
+export function getCarpetSpriteVersion(): number {
+  return spriteVersion;
+}
+
 /** Per-variant palette classification, computed once per `setCarpetSprites` call. */
 let carpetVariantPalettes: Array<{ mainRgb: string | null; accentRgb: string | null }> = [];
 
@@ -47,6 +54,7 @@ const carpetCache: Map<string, SpriteData> = new Map();
 export function setCarpetSprites(sets: SpriteData[][]): void {
   carpetSets = sets;
   carpetCache.clear();
+  spriteVersion++;
   carpetVariantPalettes = sets.map((variantSprites) => classifyCarpetPalette(variantSprites));
 }
 

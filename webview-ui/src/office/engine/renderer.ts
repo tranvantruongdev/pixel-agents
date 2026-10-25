@@ -47,6 +47,7 @@ import { mapOffset } from '../projection.js';
 import {
   getCarpetJunctionSprite,
   getCarpetPaletteKey,
+  getCarpetSpriteVersion,
   hasCarpetSprites,
 } from '../sprites/carpetTiles.js';
 import { getPetSprites } from '../sprites/petSpriteData.js';
@@ -94,29 +95,52 @@ export function isGhostHeadlessAgentsEnabled(): boolean {
  * Render the carpet layer. Called AFTER renderTileGrid and BEFORE seat
  * indicators / characters / furniture.
  *
- * Per junction (cols+1 × rows+1 grid of corners), we gather every
- * (variant, palette) pair from the up-to-4 adjacent tiles. Each pair becomes
- * one local "layer" drawn in ascending `order`, so the highest-order carpet
- * visually wins at overlaps. Sprite anchor: each 16×16 junction sprite is
- * centered on the corner — drawn at (offsetX + jx*s - halfS, offsetY + jy*s - halfS).
+ * The per-junction layer gathering below is a pure function of
+ * (carpetTiles, cols, rows) + the loaded carpet set — all replaced immutably
+ * on edits — so the resolved draw list is memoized (see getCarpetDrawEntries)
+ * and the per-frame cost of this layer is just the drawImage loop.
  *
  * @internal
  */
-export function renderCarpetLayer(
-  ctx: CanvasRenderingContext2D,
+
+/** One resolved carpet junction layer, in draw order. */
+interface CarpetDrawEntry {
+  jx: number;
+  jy: number;
+  sprite: SpriteData;
+}
+
+let carpetDrawCache: {
+  carpetTiles: Array<CarpetTile | null>;
+  cols: number;
+  rows: number;
+  version: number;
+  entries: CarpetDrawEntry[];
+} | null = null;
+
+/**
+ * Build (or reuse) the carpet draw list. Per junction (cols+1 × rows+1 grid of
+ * corners), every (variant, palette) pair of the up-to-4 adjacent tiles becomes
+ * one layer, drawn in ascending `order` so the highest-order carpet visually
+ * wins at overlaps. Sprite anchor is applied at draw time (see renderCarpetLayer).
+ */
+function getCarpetDrawEntries(
   carpetTiles: Array<CarpetTile | null>,
   cols: number,
   rows: number,
-  offsetX: number,
-  offsetY: number,
-  zoom: number,
-): void {
-  if (!hasCarpetSprites()) return;
-  if (!carpetTiles || carpetTiles.length === 0) return;
+): CarpetDrawEntry[] {
+  const version = getCarpetSpriteVersion();
+  if (
+    carpetDrawCache &&
+    carpetDrawCache.carpetTiles === carpetTiles &&
+    carpetDrawCache.cols === cols &&
+    carpetDrawCache.rows === rows &&
+    carpetDrawCache.version === version
+  ) {
+    return carpetDrawCache.entries;
+  }
 
-  const s = TILE_SIZE * zoom;
-  const halfS = s / 2;
-
+  const entries: CarpetDrawEntry[] = [];
   for (let jy = 0; jy <= rows; jy++) {
     for (let jx = 0; jx <= cols; jx++) {
       const localGroups = new Map<
@@ -169,10 +193,38 @@ export function renderCarpetLayer(
           paletteKey,
         );
         if (!sprite) continue;
-        const cached = getCachedSprite(sprite, zoom);
-        ctx.drawImage(cached, offsetX + jx * s - halfS, offsetY + jy * s - halfS);
+        entries.push({ jx, jy, sprite });
       }
     }
+  }
+
+  carpetDrawCache = { carpetTiles, cols, rows, version, entries };
+  return entries;
+}
+
+export function renderCarpetLayer(
+  ctx: CanvasRenderingContext2D,
+  carpetTiles: Array<CarpetTile | null>,
+  cols: number,
+  rows: number,
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+): void {
+  if (!hasCarpetSprites()) return;
+  if (!carpetTiles || carpetTiles.length === 0) return;
+
+  const entries = getCarpetDrawEntries(carpetTiles, cols, rows);
+  if (entries.length === 0) return;
+
+  // Each 16×16 junction sprite is centered on the corner — drawn at
+  // (offsetX + jx*s - halfS, offsetY + jy*s - halfS).
+  const s = TILE_SIZE * zoom;
+  const halfS = s / 2;
+
+  for (const { jx, jy, sprite } of entries) {
+    const cached = getCachedSprite(sprite, zoom);
+    ctx.drawImage(cached, offsetX + jx * s - halfS, offsetY + jy * s - halfS);
   }
 }
 
