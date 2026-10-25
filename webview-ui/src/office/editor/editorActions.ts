@@ -1,7 +1,7 @@
 import type { ColorValue } from '../../components/ui/types.js';
 import { DEFAULT_NEUTRAL_COLOR } from '../../constants.js';
 import { getCatalogEntry, getRotatedType, getToggledType } from '../layout/furnitureCatalog.js';
-import { getPlacementBlockedTiles } from '../layout/layoutSerializer.js';
+import { freshFurnitureUid, getPlacementBlockedTiles } from '../layout/layoutSerializer.js';
 import type {
   AreaDefinition,
   CarpetTile,
@@ -227,19 +227,6 @@ function groupFits(
 ): boolean {
   const exclude = opts.leavesOriginals ? undefined : new Set(items.map((f) => f.uid));
   return items.every((f) => canPlaceFurniture(layout, f.type, f.col, f.row, exclude));
-}
-
-/**
- * A furniture uid that isn't already taken. `taken` is updated in place, so a
- * batch of copies minted in the same millisecond can't collide with each other.
- */
-export function freshFurnitureUid(taken: Set<string>): string {
-  let uid: string;
-  do {
-    uid = `f-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  } while (taken.has(uid));
-  taken.add(uid);
-  return uid;
 }
 
 /**

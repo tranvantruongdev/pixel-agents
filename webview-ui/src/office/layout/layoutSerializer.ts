@@ -282,6 +282,19 @@ export function serializeLayout(layout: OfficeLayout): string {
   return JSON.stringify(layout);
 }
 
+/**
+ * A furniture uid that isn't already taken. `taken` is updated in place, so a
+ * batch of copies minted in the same millisecond can't collide with each other.
+ */
+export function freshFurnitureUid(taken: Set<string>): string {
+  let uid: string;
+  do {
+    uid = `f-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  } while (taken.has(uid));
+  taken.add(uid);
+  return uid;
+}
+
 // ── Furniture type migration ────────────────────────────────────
 
 /** Map old hardcoded FurnitureType values to new manifest-based IDs */
@@ -311,6 +324,18 @@ function migrateFurnitureTypes(furniture: PlacedFurniture[]): PlacedFurniture[] 
     // newType === null → remove the item (no equivalent)
   }
   return migrated;
+}
+
+/** Re-mint duplicate furniture uids, keeping every item. The 2nd+ occurrence
+ *  of a uid gets a fresh one; first occurrences are untouched so existing seat
+ *  assignments and editor selection stay valid. */
+function dedupeFurnitureUids(furniture: PlacedFurniture[]): PlacedFurniture[] {
+  const taken = new Set<string>();
+  return furniture.map((item) => {
+    if (taken.has(item.uid)) return { ...item, uid: freshFurnitureUid(taken) };
+    taken.add(item.uid);
+    return item;
+  });
 }
 
 /** Deserialize layout from JSON string, migrating old tile types if needed
@@ -357,6 +382,12 @@ function migrateLayout(layout: OfficeLayout): OfficeLayout {
 
   // Migrate furniture types
   layout = { ...layout, furniture: migrateFurnitureTypes(layout.furniture) };
+
+  // Re-mint duplicate furniture uids — a layout from disk (hand-edited,
+  // exported then re-imported, or written by an older build) can carry two
+  // items sharing one uid. Seat uids derive from item uids, so the collision
+  // drops seats, and uid-keyed editor actions act on every duplicate at once.
+  layout = { ...layout, furniture: dedupeFurnitureUids(layout.furniture) };
 
   // Migrate old VOID value (was 8, now 255) — only for legacy layouts since FLOOR_8 reuses value 8
   const OLD_VOID = 8;

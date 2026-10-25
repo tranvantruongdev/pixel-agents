@@ -11,10 +11,16 @@
 
 import assert from 'node:assert/strict';
 
-import { test } from 'vitest';
+import { beforeAll, test } from 'vitest';
 
 import type { ColorValue } from '../src/components/ui/types.js';
-import { layoutToTileMap, migrateLayoutColors } from '../src/office/layout/layoutSerializer.js';
+import type { LoadedAssetData } from '../src/office/layout/furnitureCatalog.js';
+import { buildDynamicCatalog } from '../src/office/layout/furnitureCatalog.js';
+import {
+  layoutToSeats,
+  layoutToTileMap,
+  migrateLayoutColors,
+} from '../src/office/layout/layoutSerializer.js';
 import type { OfficeLayout, PlacedFurniture, PlacedPet } from '../src/office/types.js';
 import { TileType } from '../src/office/types.js';
 
@@ -135,6 +141,76 @@ test('migrateLayoutColors preserves furniture and other fields untouched', () =>
   assert.equal(migrated.cols, 4);
   assert.equal(migrated.rows, 3);
   assert.equal(migrated.version, 1);
+});
+
+// ── Migration: duplicate furniture uids ────────────────────────
+// A layout from disk (hand-edited, exported then re-imported, or written by an
+// older build) can carry two furniture items sharing one uid. Seat uids derive
+// from item uids, so the collision makes layoutToSeats drop the first chair's
+// seat, and every uid-keyed editor action (removeFurniture, moveFurniture…)
+// hits all duplicates at once. Migration must re-mint the 2nd+ occurrence and
+// keep both items.
+
+beforeAll(() => {
+  // layoutToSeats only counts chairs registered in the dynamic catalog.
+  const catalog: Array<LoadedAssetData['catalog'][number]> = [
+    {
+      id: 'CHAIR_FRONT',
+      label: 'Chair',
+      category: 'chairs',
+      width: 16,
+      height: 32,
+      footprintW: 1,
+      footprintH: 2,
+      isDesk: false,
+      backgroundTiles: 1,
+    },
+  ];
+  const sprites = Object.fromEntries(catalog.map((a) => [a.id, [['']]]));
+  assert.ok(buildDynamicCatalog({ catalog, sprites }));
+});
+
+function duplicateUidFurniture(): PlacedFurniture[] {
+  return [
+    { uid: 'dup', type: 'CHAIR_FRONT', col: 1, row: 0 },
+    { uid: 'dup', type: 'CHAIR_FRONT', col: 2, row: 0 },
+  ];
+}
+
+test('migrateLayoutColors re-mints duplicate furniture uids, keeping both items', () => {
+  const layout = baseLayout({ furniture: duplicateUidFurniture() });
+  const migrated = migrateLayoutColors(layout);
+  assert.equal(migrated.furniture.length, 2, 'both items kept');
+  const uids = migrated.furniture.map((f) => f.uid);
+  assert.equal(new Set(uids).size, 2, 'uids unique after migration');
+  assert.equal(migrated.furniture[0].uid, 'dup', 'first occurrence keeps its uid');
+  assert.deepEqual(
+    migrated.furniture.map((f) => [f.col, f.row]),
+    [
+      [1, 0],
+      [2, 0],
+    ],
+    'items stay where they were placed',
+  );
+});
+
+test('migrateLayoutColors restores a seat for every chair after re-minting a duplicate uid', () => {
+  const layout = baseLayout({ furniture: duplicateUidFurniture() });
+  const migrated = migrateLayoutColors(layout);
+  assert.equal(layoutToSeats(migrated.furniture).size, 2, 'both chairs keep their own seat');
+});
+
+test('migrateLayoutColors leaves unique furniture uids untouched', () => {
+  const furniture: PlacedFurniture[] = [
+    { uid: 'a', type: 'CHAIR_FRONT', col: 1, row: 0 },
+    { uid: 'b', type: 'CHAIR_FRONT', col: 2, row: 0 },
+  ];
+  const layout = baseLayout({ furniture });
+  const migrated = migrateLayoutColors(layout);
+  assert.deepEqual(
+    migrated.furniture.map((f) => f.uid),
+    ['a', 'b'],
+  );
 });
 
 // ── Migration: idempotency ────────────────────────────────────
