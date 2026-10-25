@@ -88,6 +88,23 @@ export interface FurnitureAsset {
   frame?: number;
 }
 
+/** Largest accepted sprite dimension. The biggest bundled sheet is 112×96, so
+ *  1024 leaves generous headroom for hi-res custom packs while a mistyped
+ *  manifest (e.g. 100000×100000) can no longer allocate 10^10 decoder cells. */
+export const MAX_SPRITE_DIMENSION = 1024;
+
+/** Manifest width/height reach us untyped through JSON.parse — reject
+ *  non-integers, non-positive values and out-of-range sizes before they
+ *  reach a decoder (a 0-row sprite crashes the webview outline pass). */
+export function isValidSpriteDimension(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= MAX_SPRITE_DIMENSION
+  );
+}
+
 /**
  * Recursively flatten a manifest node into FurnitureAsset[].
  * Inherited properties flow from root to all leaf assets.

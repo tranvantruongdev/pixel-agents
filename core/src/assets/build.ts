@@ -10,7 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { FurnitureManifest, InheritedProps, ManifestGroup } from './manifestUtils.js';
-import { flattenManifest } from './manifestUtils.js';
+import { flattenManifest, isValidSpriteDimension } from './manifestUtils.js';
 import type { CatalogEntry } from './types.js';
 
 // ── Furniture catalog ─────────────────────────────────────────────────────────
@@ -35,10 +35,8 @@ export function buildFurnitureCatalog(assetsDir: string): CatalogEntry[] {
       if (manifest.type === 'asset') {
         // Single-asset manifest — validate required fields
         if (
-          manifest.width === undefined ||
-          manifest.width === null ||
-          manifest.height === undefined ||
-          manifest.height === null ||
+          !isValidSpriteDimension(manifest.width) ||
+          !isValidSpriteDimension(manifest.height) ||
           manifest.footprintW === undefined ||
           manifest.footprintW === null ||
           manifest.footprintH === undefined ||
@@ -82,7 +80,9 @@ export function buildFurnitureCatalog(assetsDir: string): CatalogEntry[] {
           rotationScheme: manifest.rotationScheme,
           members: manifest.members,
         };
-        const assets = flattenManifest(rootGroup, inherited);
+        const assets = flattenManifest(rootGroup, inherited).filter(
+          (asset) => isValidSpriteDimension(asset.width) && isValidSpriteDimension(asset.height),
+        );
         for (const asset of assets) {
           catalog.push({
             ...asset,

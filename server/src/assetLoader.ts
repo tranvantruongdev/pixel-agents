@@ -21,7 +21,10 @@ import type {
   InheritedProps,
   ManifestGroup,
 } from '../../core/src/assets/manifestUtils.js';
-import { flattenManifest } from '../../core/src/assets/manifestUtils.js';
+import {
+  flattenManifest,
+  isValidSpriteDimension,
+} from '../../core/src/assets/manifestUtils.js';
 import {
   decodeCharacterPng,
   decodeFloorPng,
@@ -141,6 +144,14 @@ export async function loadFurnitureAssets(workspaceRoot: string): Promise<Loaded
           };
           assets = flattenManifest(rootGroup, inherited);
         }
+
+        // Manifest dimensions arrive untyped from JSON.parse. A zero or mistyped
+        // value decodes to a 0-row sprite (the webview outline pass crashes on
+        // sprite[0].length); an oversized one allocates width×height cells in
+        // the decoder. Skip the asset instead of loading it.
+        assets = assets.filter(
+          (asset) => isValidSpriteDimension(asset.width) && isValidSpriteDimension(asset.height),
+        );
 
         // Load PNGs for each asset
         for (const asset of assets) {
