@@ -340,10 +340,13 @@ export function useEditorActions(
       const layout = os.getLayout();
       const next = updateAreaColor(layout, label, color);
       if (next !== layout) {
-        applyEdit(next);
+        // The native color input streams an event per picker adjustment, so a
+        // drag is many commits — share a session so the run is ONE undo entry,
+        // same as the wall color slider.
+        commitLayout(next, 'areaColor');
       }
     },
-    [getOfficeState, applyEdit],
+    [getOfficeState, commitLayout],
   );
 
   const handleTileTypeChange = useCallback(
