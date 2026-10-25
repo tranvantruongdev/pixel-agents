@@ -12,6 +12,7 @@
  * install surface is a no-op that reports itself installed (no consent ask).
  */
 
+import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -31,6 +32,13 @@ export function dshAppPath(): string {
     'DeepSeek Harness',
     'DeepSeek Harness.exe',
   );
+}
+
+/** Kill the chat loop's still-running headless turn, if any. /exit and
+ *  Ctrl+D close the loop even mid-turn; without this the dsh child outlives
+ *  the loop as an orphan that keeps spending account credit. */
+export function killRunningTurn(child: ChildProcess | undefined): void {
+  child?.kill();
 }
 
 const READING_TOOLS: ReadonlySet<string> = new Set(['read', 'fs_search', 'session_query']);

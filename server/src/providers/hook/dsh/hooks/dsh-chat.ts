@@ -22,7 +22,7 @@ import * as readline from 'readline';
 import { HOOK_API_PREFIX, SERVER_JSON_DIR, SERVERS_DIR } from '../../../../constants.js';
 import type { ServerConfig } from '../../../../serverConfig.js';
 import { isServerConfig } from '../../../../serverConfig.js';
-import { DSH_PROVIDER_ID, dshAppPath } from '../dsh.js';
+import { DSH_PROVIDER_ID, dshAppPath, killRunningTurn } from '../dsh.js';
 
 /** The headless profile ships with the DeepSeek account sign-in switched off
  *  (API key only). This overlay turns it back on and selects the account
@@ -193,6 +193,7 @@ rl.on('line', (line) => {
   });
 });
 rl.on('close', () => {
+  killRunningTurn(running);
   post({ hook_event_name: 'SessionEnd', reason: 'exit' });
   setTimeout(() => process.exit(0), 300);
 });
