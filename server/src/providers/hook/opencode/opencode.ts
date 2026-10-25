@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 import type { AgentEvent, HookProvider } from '../../../../../core/src/provider.js';
@@ -229,6 +230,17 @@ function consentDisclosure(): { headline: string; disclosure: string } {
 // No team extension in the MVP: task subagents render as basic sub-agent
 // characters via the handler's hook-fallback parent resolution.
 
+/** OpenCode's own config dir — absent when the CLI was never installed. Keeps
+ *  the startup consent notice silent for users without OpenCode (cli.ts skips
+ *  providers whose CLI is not present), same rule as codexLooksInstalled. */
+export function opencodeLooksInstalled(): boolean {
+  try {
+    return fs.existsSync(path.join(os.homedir(), '.config', 'opencode'));
+  } catch {
+    return false;
+  }
+}
+
 export const opencodeProvider: HookProvider = {
   kind: 'hook',
   id: OPENCODE_PROVIDER_ID,
@@ -241,6 +253,7 @@ export const opencodeProvider: HookProvider = {
   uninstallHooks,
   areHooksInstalled,
   consentDisclosure,
+  isPresent: opencodeLooksInstalled,
 
   formatToolStatus,
   permissionExemptTools: new Set(['task', 'question']),
