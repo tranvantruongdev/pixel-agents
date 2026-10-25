@@ -1,5 +1,5 @@
 import type { ColorValue } from '../../components/ui/types.js';
-import { PALETTE_COUNT } from '../../constants.js';
+import { PALETTE_COUNT, SPRITE_CACHE_MAX_ENTRIES } from '../../constants.js';
 import { adjustSprite } from '../colorize.js';
 import type { Direction, SpriteData } from '../types.js';
 import { Direction as Dir } from '../types.js';
@@ -182,6 +182,13 @@ export function getCharacterSprites(paletteIndex: number, hueShift = 0): Charact
     sprites = hueShiftSprites(sprites, hueShift);
   }
 
+  // Bounded FIFO (see SPRITE_CACHE_MAX_ENTRIES): every agent past the first
+  // palette round gets a random hue shift of its own, so the oldest insert is
+  // dropped past the cap and recomputed on demand if its agent is still live.
+  if (spriteCache.size >= SPRITE_CACHE_MAX_ENTRIES) {
+    const oldest = spriteCache.keys().next().value;
+    if (oldest !== undefined) spriteCache.delete(oldest);
+  }
   spriteCache.set(cacheKey, sprites);
   return sprites;
 }

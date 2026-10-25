@@ -42,7 +42,9 @@ export default defineConfig([
     },
   },
   {
-    files: ['src/constants.ts', 'src/fonts/**', 'src/office/sprites/**'],
+    // Sprite data and the tests that build it express pixels as hex matrices,
+    // not UI colors; the pixel-style rules govern rendered markup only.
+    files: ['src/constants.ts', 'src/fonts/**', 'src/office/sprites/**', 'test/**'],
     rules: {
       'pixel-agents/no-inline-colors': 'off',
       'pixel-agents/pixel-shadow': 'off',

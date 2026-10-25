@@ -7,6 +7,7 @@
  */
 
 import type { ColorValue } from '../components/ui/types.js';
+import { SPRITE_CACHE_MAX_ENTRIES } from '../constants.js';
 import type { SpriteData } from './types.js';
 
 /** Generic colorized sprite cache: arbitrary string key → SpriteData */
@@ -25,6 +26,13 @@ export function getColorizedSprite(
   const cached = colorizeCache.get(cacheKey);
   if (cached) return cached;
   const result = color.colorize ? colorizeSprite(sprite, color) : adjustSprite(sprite, color);
+  // Bounded FIFO (see SPRITE_CACHE_MAX_ENTRIES): sliders mint a key per
+  // intermediate drag value, so the oldest insert is dropped past the cap and
+  // recomputed on demand if a live color asks for it again.
+  if (colorizeCache.size >= SPRITE_CACHE_MAX_ENTRIES) {
+    const oldest = colorizeCache.keys().next().value;
+    if (oldest !== undefined) colorizeCache.delete(oldest);
+  }
   colorizeCache.set(cacheKey, result);
   return result;
 }

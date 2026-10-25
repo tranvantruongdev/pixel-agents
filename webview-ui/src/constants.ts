@@ -565,3 +565,11 @@ export const KEYBOARD_MIN_HEIGHT_PX = 150;
  *  Mirrors MAX_PENDING_BROADCASTS on the extension host: an unreachable
  *  server must not grow a background tab's memory forever. */
 export const MAX_PENDING_CLIENT_MESSAGES = 1000;
+
+/** Cap on the sprite-recolor caches (colorize / carpet tiles / character
+ *  hues). Colour sliders mint a fresh key per intermediate drag value and
+ *  every agent past the first palette round gets a random hue shift, so an
+ *  unbounded cache grows for the whole session; past the cap the oldest
+ *  insert is dropped and recomputed on demand. A layout's working set of
+ *  live colors sits far below this. */
+export const SPRITE_CACHE_MAX_ENTRIES = 512;

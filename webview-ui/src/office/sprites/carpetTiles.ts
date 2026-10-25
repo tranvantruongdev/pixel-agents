@@ -12,7 +12,11 @@
  */
 
 import type { ColorValue } from '../../components/ui/types.js';
-import { CARPET_DEFAULT_ACCENT_COLOR, CARPET_DEFAULT_COLOR } from '../../constants.js';
+import {
+  CARPET_DEFAULT_ACCENT_COLOR,
+  CARPET_DEFAULT_COLOR,
+  SPRITE_CACHE_MAX_ENTRIES,
+} from '../../constants.js';
 import { flatColorizeSprite } from '../colorize.js';
 import type { CarpetTile, SpriteData } from '../types.js';
 
@@ -256,6 +260,14 @@ function getDualColorizedCarpetSprite(
   const accentLayer = flatColorizeSprite(accentMask, accentColor);
 
   const merged = mergeCarpetLayers(mainLayer, accentLayer);
+  // Bounded FIFO (see SPRITE_CACHE_MAX_ENTRIES): the carpet colour sliders
+  // mint a key pair per intermediate drag value, so the oldest insert is
+  // dropped past the cap and recomputed on demand if a live color asks for
+  // it again.
+  if (carpetCache.size >= SPRITE_CACHE_MAX_ENTRIES) {
+    const oldest = carpetCache.keys().next().value;
+    if (oldest !== undefined) carpetCache.delete(oldest);
+  }
   carpetCache.set(cacheKey, merged);
   return merged;
 }
