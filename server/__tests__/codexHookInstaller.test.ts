@@ -142,6 +142,25 @@ describe('codexHookInstaller', () => {
       expect(fs.existsSync(getCodexHooksPath() + '.pixel-agents.backup')).toBe(false);
     });
 
+    // "No backup must mean no write": a failed backup aborts the install with
+    // the user's file untouched, instead of installing over it without a
+    // restore point. Windows can't express this via directory modes, so the
+    // POSIX shards pin it.
+    it.skipIf(process.platform === 'win32')(
+      'aborts the install when the backup cannot be written',
+      async () => {
+        writeFile({ hooks: { PreToolUse: [FOREIGN] } });
+        const dir = path.dirname(getCodexHooksPath());
+        fs.chmodSync(dir, 0o500); // readable+listable, but no file creation
+        try {
+          await expect(installHooks('u', 't')).rejects.toThrow();
+          expect(JSON.stringify(readFile())).toContain('audit.py');
+        } finally {
+          fs.chmodSync(dir, 0o700);
+        }
+      },
+    );
+
     it('sweeps our entry off an event that is no longer in the install list', async () => {
       // Simulate a legacy install that hooked an event we since dropped.
       await installHooks('u', 't');

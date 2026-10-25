@@ -108,11 +108,10 @@ function writeHooksFile(next: CodexHooksFile, hadExisting: boolean): void {
   if (hadExisting) {
     const backup = p + HOOKS_BACKUP_SUFFIX;
     if (!fs.existsSync(backup)) {
-      try {
-        fs.copyFileSync(p, backup);
-      } catch {
-        /* a failed backup must not block the install; the write is still atomic */
-      }
+      // "No backup must mean no write" (claudeHookInstaller's rule): the
+      // rename below replaces the file whole, so this copy is the user's only
+      // restore point — a failed backup must abort, not install over it.
+      fs.copyFileSync(p, backup);
     }
   }
 
