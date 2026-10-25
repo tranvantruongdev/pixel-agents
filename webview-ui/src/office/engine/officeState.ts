@@ -174,6 +174,10 @@ export class OfficeState {
 
     // First pass: try to keep characters at their existing seats
     for (const ch of this.characters.values()) {
+      // A character mid-despawn is leaving — it must not re-claim the seat
+      // removeAgent freed: nothing would free it again once the despawn
+      // completes, so the seat would stay assigned forever.
+      if (ch.matrixEffect === 'despawn') continue;
       if (ch.seatId && this.seats.has(ch.seatId)) {
         const seat = this.seats.get(ch.seatId)!;
         if (!seat.assigned) {
