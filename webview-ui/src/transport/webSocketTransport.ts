@@ -5,6 +5,7 @@ import {
   TRANSPORT_STATE_RECONNECTING,
 } from '../../../core/src/constants.js';
 import type { ClientMessage, ServerMessage } from '../../../core/src/messages.js';
+import { MAX_PENDING_CLIENT_MESSAGES } from '../constants.js';
 import { reconnectDelayMs } from './reconnectBackoff.js';
 import type { MessageTransport, TransportState } from './types.js';
 
@@ -94,8 +95,14 @@ export class WebSocketTransport implements MessageTransport {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     } else {
-      // Queue messages while connecting (flushed in onopen)
+      // Queue messages while connecting (flushed in onopen). Bounded, dropping
+      // the oldest past the cap — an unreachable server must not grow a
+      // background tab's memory forever (mirrors MAX_PENDING_BROADCASTS on
+      // the extension host).
       this.pendingMessages.push(message);
+      if (this.pendingMessages.length > MAX_PENDING_CLIENT_MESSAGES) {
+        this.pendingMessages.shift();
+      }
     }
   }
 

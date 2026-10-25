@@ -560,3 +560,8 @@ export const VISUAL_VIEWPORT_FULL_EPSILON_PX = 1;
  *  (with an editable focused) = the software keyboard is up. Well above an
  *  address bar collapsing (~56 px), well below any on-screen keyboard. */
 export const KEYBOARD_MIN_HEIGHT_PX = 150;
+
+/** Cap on messages queued while the WebSocket is down (drop oldest past it).
+ *  Mirrors MAX_PENDING_BROADCASTS on the extension host: an unreachable
+ *  server must not grow a background tab's memory forever. */
+export const MAX_PENDING_CLIENT_MESSAGES = 1000;
