@@ -243,6 +243,13 @@ export function useExtensionMessages(
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
 
+  // The message effect runs once and its handler keeps the `isEditDirty`
+  // callback from mount, which always reports a clean editor — a WS reconnect
+  // resends layoutLoaded and would clobber the unsaved layout. Mirror the
+  // latest callback into a ref (same pattern as layoutReadyRef).
+  const isEditDirtyRef = useRef(isEditDirty);
+  isEditDirtyRef.current = isEditDirty;
+
   // Live background spawn tools per agent (runInBackground agentToolStart, or a
   // lazily-created watched sub). Their sub-characters outlive the parent's turn:
   // agentToolsClear must NOT remove them — despawning and re-creating moved the
@@ -340,7 +347,7 @@ export function useExtensionMessages(
 
       if (msg.type === 'layoutLoaded') {
         // Skip external layout updates while editor has unsaved changes
-        if (layoutReadyRef.current && isEditDirty?.()) {
+        if (layoutReadyRef.current && isEditDirtyRef.current?.()) {
           console.log('[Webview] Skipping external layout update — editor has unsaved changes');
           return;
         }
