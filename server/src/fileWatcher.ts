@@ -40,6 +40,7 @@ import {
   FILE_WATCHER_POLL_INTERVAL_MS,
   GLOBAL_SCAN_ACTIVE_MAX_AGE_MS,
   GLOBAL_SCAN_ACTIVE_MIN_SIZE,
+  GLOBAL_SCAN_STALE_RESTAT_MS,
   PROJECT_SCAN_INTERVAL_MS,
 } from './constants.js';
 import { seedContextUsage } from './contextUsage.js';
@@ -1439,6 +1440,13 @@ function directoryNameFromProjectDir(dirName: string): string {
   return parts[parts.length - 1] || dirName;
 }
 
+/** Global scan (Watch All Sessions): per-file wall time of the last stat.
+ *  Past-session transcripts under the session roots are static until resumed,
+ *  so after one stale reading they are only re-stated every
+ *  GLOBAL_SCAN_STALE_RESTAT_MS — entries for adopted (known) files are
+ *  shadowed by the knownJsonlFiles check and never cleaned. */
+const globalStaleStatAt = new Map<string, number>();
+
 /** Scan every session root the active provider exposes for active sessions
  *  (global discovery — powers the "Watch All Sessions" toggle). */
 function scanGlobalProjectDirs(
@@ -1492,9 +1500,17 @@ function scanGlobalProjectDirs(
         }
       }
       if (tracked) continue;
+      // Stale files are re-stated at most every GLOBAL_SCAN_STALE_RESTAT_MS:
+      // only a rewrite (a resumed session) can make one eligible again, and
+      // that detection may then lag one restat window instead of one tick.
+      const lastStaleStat = globalStaleStatAt.get(file);
+      if (lastStaleStat !== undefined && now - lastStaleStat < GLOBAL_SCAN_STALE_RESTAT_MS) {
+        continue;
+      }
       // Activity filter: >3KB AND modified within 10 minutes
       try {
         const stat = fs.statSync(file);
+        globalStaleStatAt.set(file, now);
         if (stat.size < GLOBAL_SCAN_ACTIVE_MIN_SIZE) continue;
         if (now - stat.mtimeMs > GLOBAL_SCAN_ACTIVE_MAX_AGE_MS) continue;
       } catch {

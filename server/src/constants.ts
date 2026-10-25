@@ -46,6 +46,13 @@ export const CONTEXT_SEED_TAIL_BYTES = 256 * 1024;
 export const GLOBAL_SCAN_ACTIVE_MIN_SIZE = 3_072; // 3KB
 /** Only adopt global JSONL files modified within this window */
 export const GLOBAL_SCAN_ACTIVE_MAX_AGE_MS = 600_000; // 10 minutes
+/** A global-scan file seen stale is only re-stated after this long. ~/.claude/projects
+ *  carries one transcript per past session and none of them change until resumed, so
+ *  stat-ing every file every 3s tick cost ~500 stat/s (~30 CPU-ms/s) on a
+ *  real-world machine (30 projects x 50 sessions). A resumed OLD session may
+ *  now take up to this long to be re-adopted instead of one 3s tick; agents
+ *  already being watched poll their own file at 500ms and are untouched. */
+export const GLOBAL_SCAN_STALE_RESTAT_MS = 30_000;
 
 // ── Directory Suggestions ───────────────────────────────────
 /** How much of a session transcript is read to recover the working directory it
