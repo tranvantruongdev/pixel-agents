@@ -11,10 +11,11 @@ import type {
   ReloadAssetsSideEffect,
   SetHooksEnabledSideEffect,
 } from './clientMessageHandler.js';
-import { handleClientMessage } from './clientMessageHandler.js';
+import { clipClientType, handleClientMessage } from './clientMessageHandler.js';
 import {
   HOOK_API_PREFIX,
   MAX_HOOK_BODY_SIZE,
+  MAX_WS_MESSAGE_BYTES,
   WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_CLOSE_UNAUTHORIZED,
 } from './constants.js';
@@ -87,7 +88,13 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
   });
 
   await app.register(fastifyCors, { origin: true });
-  await app.register(fastifyWebsocket);
+  await app.register(fastifyWebsocket, {
+    // Bounds what ONE frame may make us buffer and parse, on every socket
+    // (/ws, /terminal). The default is ws's 100 MiB, and a frame is handled
+    // before the privilege gate — a tokenless DNS-rebound page reaches that
+    // path — so the cap is the transport-level guard on untrusted input.
+    options: { maxPayload: MAX_WS_MESSAGE_BYTES },
+  });
 
   // Static SPA serving (standalone mode only)
   if (!options.embedded && options.staticDir) {
@@ -252,7 +259,10 @@ function registerWebSocketRoute(
       try {
         const msg = JSON.parse(data.toString()) as Record<string, unknown>;
         if (!options.embedded && msg.type) {
-          console.log('[Pixel Agents] WS client message:', msg.type);
+          console.log(
+            '[Pixel Agents] WS client message:',
+            clipClientType(typeof msg.type === 'string' ? msg.type : String(msg.type)),
+          );
         }
         handleClientMessage(msg, (m) => safeSend(socket, m), {
           store,

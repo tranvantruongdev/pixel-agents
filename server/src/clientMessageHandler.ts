@@ -692,6 +692,18 @@ function settingsSnapshot(adapter: StateAdapter | undefined) {
   } as const;
 }
 
+/** Longest client `type` string kept in a log line or the read-only refusal
+ *  Set. The field is attacker-controlled and reaches the log before any
+ *  privilege gate (a tokenless DNS-rebound page can send messages), so it is
+ *  clipped at the boundary. */
+const CLIENT_TYPE_LOG_MAX = 64;
+
+/** Clip a client message type for logging/dedupe. Exported for httpServer,
+ *  which logs every standalone message type before dispatching it here. */
+export function clipClientType(type: string): string {
+  return type.length > CLIENT_TYPE_LOG_MAX ? `${type.slice(0, CLIENT_TYPE_LOG_MAX)}…` : type;
+}
+
 /** Message types already reported as refused, so a read-only client that keeps
  *  sending (seat saves, layout saves) logs once per type, not per message. */
 const reportedRefusals = new Set<string>();
@@ -707,7 +719,7 @@ function refuseReadOnly(
   send: WsSend,
   ctx: ClientMessageContext,
 ): void {
-  const type = String(msg.type);
+  const type = clipClientType(String(msg.type));
   if (!reportedRefusals.has(type)) {
     reportedRefusals.add(type);
     console.warn(

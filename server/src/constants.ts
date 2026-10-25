@@ -109,6 +109,13 @@ export const HOOK_EVENT_BUFFER_MS = 5_000;
  *  the agent is cleaned up instead of staying as a zombie with pendingClear forever. */
 export const SESSION_END_GRACE_MS = 2000;
 export const MAX_HOOK_BODY_SIZE = 65_536; // 64KB
+/** WebSocket message ceiling for every socket this server opens (/ws,
+ *  /terminal/:agentId). Without it ws defaults to 100 MiB per frame, and a
+ *  frame is buffered and parsed BEFORE the privilege gate — a tokenless
+ *  DNS-rebound page reaches that path — so the cap is what bounds the buffer
+ *  and the parse. 2 MiB sits far above any real state update (saveLayout) or
+ *  terminal paste. */
+export const MAX_WS_MESSAGE_BYTES = 2 * 1024 * 1024;
 
 // ── Standalone Embedded Terminal ────────────────────────────
 /** PTY module ids tried in order by the loader. @lydell/node-pty ships prebuilt
