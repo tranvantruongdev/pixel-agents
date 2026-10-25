@@ -101,6 +101,11 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   // runners hook events that arrive during iframe init (mock-claude scenarios
   // start writing within ~3 s of agent spawn) silently never reach the UI.
   private isWebviewReady = false;
+
+  // Listeners registered per resolved view instance. A re-resolved view means
+  // VS Code destroyed the previous webview; its window-level terminal
+  // listeners keep the dead webviewView alive in closure until disposed here.
+  private viewEventListeners: vscode.Disposable[] = [];
   private pendingBroadcasts: Array<Record<string, unknown>> = [];
 
   // Shared agent lifecycle core (timer Maps, scanners, hook handler, dismissal tracker)
@@ -464,323 +469,17 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     this.webviewView = webviewView;
     // Fresh iframe; any prior buffer is for the destroyed iframe and obsolete
     // (the `webviewReady` handler resends current state via restoreAgents +
-    // sendCurrentAgentStatuses + asset loaders).
+    // sendCurrentAgentStatuses + asset loaders). Same for its listeners.
+    for (const d of this.viewEventListeners) d.dispose();
+    this.viewEventListeners = [];
     this.isWebviewReady = false;
     this.pendingBroadcasts = [];
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = getWebviewContent(webviewView.webview, this.extensionUri);
 
-    webviewView.webview.onDidReceiveMessage(async (message) => {
-      if (message.type === 'launchAgent') {
-        const prevAgentIds = new Set(this.store.keys());
-        await launchNewTerminal(
-          this.store.nextAgentId,
-          this.store.nextTerminalIndex,
-          this.store,
-          this.runtime.activeAgentId,
-          this.runtime.knownJsonlFiles,
-          this.runtime.fileWatchers,
-          this.runtime.pollingTimers,
-          this.runtime.waitingTimers,
-          this.runtime.permissionTimers,
-          this.runtime.jsonlPollTimers,
-          this.runtime.projectScanTimer,
-          () => this.store.persist(),
-          // Every launch comes from a drawer row and carries its Directory's
-          // path; no directoryPath leaves launchNewTerminal's own fallback —
-          // the first workspace folder — exactly as it was.
-          message.directoryPath as string | undefined,
-          // Permission posture is a persisted per-host setting, never a
-          // per-launch field: the webview sends only where to launch.
-          this.adapter.getSetting<boolean>(GLOBAL_KEY_BYPASS_PERMISSIONS, false),
-        );
-        // Register newly created agent(s) with hook handler
-        for (const [id, agent] of this.store) {
-          if (!prevAgentIds.has(id)) {
-            this.runtime.registerAgent(agent.sessionId, id);
-          }
-        }
-      } else if (message.type === 'focusAgent') {
-        const agent = this.store.get(message.id);
-        if (agent) {
-          if (agent.terminalRef) {
-            agent.terminalRef.show();
-          } else if (agent.leadAgentId !== undefined) {
-            // Teammate (tmux): focus the lead's terminal instead
-            const lead = this.store.get(agent.leadAgentId);
-            if (lead?.terminalRef) {
-              lead.terminalRef.show();
-            }
-          }
-        }
-      } else if (message.type === 'closeAgent') {
-        const agent = this.store.get(message.id);
-        if (agent) {
-          if (agent.terminalRef) {
-            agent.terminalRef.dispose();
-          } else {
-            // External agent -- remove from tracking and dismiss the file
-            // so the external scanner doesn't re-adopt it
-            this.runtime.dismissalTracker.dismiss(agent.jsonlFile);
-            this.runtime.removeAgent(message.id);
-          }
-        }
-      } else if (message.type === 'saveAgentSeats') {
-        // Store seat assignments in a separate key (never touched by persistAgents)
-        console.log(`[Pixel Agents] State: saveAgentSeats:`, JSON.stringify(message.seats));
-        this.adapter.saveSeats(message.seats);
-      } else if (message.type === 'saveLayout') {
-        this.layoutWatcher?.markOwnWrite();
-        writeLayoutToFile(message.layout as Record<string, unknown>);
-      } else if (message.type === 'setSoundEnabled') {
-        this.adapter.setSetting(GLOBAL_KEY_SOUND_ENABLED, message.enabled);
-      } else if (message.type === 'setLastSeenVersion') {
-        this.adapter.setSetting(GLOBAL_KEY_LAST_SEEN_VERSION, message.version as string);
-      } else if (message.type === 'setAlwaysShowLabels') {
-        this.adapter.setSetting(GLOBAL_KEY_ALWAYS_SHOW_LABELS, message.enabled);
-      } else if (message.type === 'setGhostHeadlessAgents') {
-        this.adapter.setSetting(GLOBAL_KEY_GHOST_HEADLESS_AGENTS, message.enabled);
-      } else if (message.type === 'setHooksEnabled') {
-        // The provider id is echoed by the webview, never originated; an
-        // unknown id names nothing to install into, so it is dropped like a
-        // junk consent choice.
-        const provider = hookProviderById(message.providerId);
-        if (provider) void this.setHooksEnabled(provider, message.enabled as boolean);
-      } else if (message.type === 'hooksConsentResponse') {
-        const provider = hookProviderById(message.providerId);
-        if (provider) {
-          void applyConsentChoice(provider.id, message.choice, this.consentEffects(provider));
-        }
-      } else if (message.type === 'setHooksInfoShown') {
-        this.adapter.setSetting(GLOBAL_KEY_HOOKS_INFO_SHOWN, true);
-      } else if (message.type === 'setShowAreas') {
-        const enabled = message.enabled as boolean;
-        this.adapter.setSetting(GLOBAL_KEY_SHOW_AREAS, enabled);
-      } else if (
-        message.type === 'saveDirectory' ||
-        message.type === 'removeDirectory' ||
-        message.type === 'requestDirectorySuggestions'
-      ) {
-        // Shared with the standalone host: same validation, same union, same
-        // machine-wide config. This surface has a single office, so the
-        // rebroadcast and the point-to-point reply are the same channel.
-        handleDirectoryClientMessage(message as Record<string, unknown>, {
-          hostDirectories: () => this.shownHostDirectories(),
-          broadcast: (m) => this.sendOrBuffer(m),
-          reply: (m) => this.sendOrBuffer(m),
-          suggestions: () =>
-            collectDirectorySuggestions(claudeProvider, this.shownHostDirectories()),
-        });
-      } else if (message.type === 'setShowHostDirectories') {
-        if (typeof message.enabled === 'boolean') {
-          this.adapter.setSetting(GLOBAL_KEY_SHOW_HOST_DIRECTORIES, message.enabled);
-          this.sendDirectories();
-        }
-      } else if (message.type === 'setBypassPermissions') {
-        if (typeof message.enabled === 'boolean') {
-          this.adapter.setSetting(GLOBAL_KEY_BYPASS_PERMISSIONS, message.enabled);
-          // Through the store, not straight to the webview: the store's
-          // broadcast also reaches offices on the embedded server's /ws, which
-          // launch under this same posture.
-          this.store.broadcast({
-            type: 'bypassPermissionsUpdated',
-            enabled: this.adapter.getSetting<boolean>(GLOBAL_KEY_BYPASS_PERMISSIONS, false),
-          });
-        }
-      } else if (message.type === 'saveAreaMappings') {
-        const mappings = message.mappings as Record<string, string[]>;
-        const cfg = readConfig();
-        cfg.vscode.areaMappings = mappings;
-        writeConfig(cfg);
-      } else if (message.type === 'setWatchAllSessions') {
-        const enabled = message.enabled as boolean;
-        this.adapter.setSetting(GLOBAL_KEY_WATCH_ALL_SESSIONS, enabled);
-        this.runtime.watchAllSessions.current = enabled;
-        if (enabled) {
-          // Clear only toggle-specific dismissals so global agents can be re-adopted
-          for (const file of this.globalDismissedFiles) {
-            this.runtime.dismissalTracker.clearDismissal(file);
-          }
-          this.globalDismissedFiles.clear();
-        } else {
-          // Remove all external agents not from the current workspace folders.
-          // PathSet: an agent adopted via hooks carries Claude's spelling of the
-          // project dir, which differs from VS Code's by drive-letter case on Windows.
-          const workspaceDirs = new PathSet();
-          for (const folder of vscode.workspace.workspaceFolders ?? []) {
-            const dir = getProjectDirPath(folder.uri.fsPath);
-            if (dir) workspaceDirs.add(dir);
-          }
-          const toRemove: number[] = [];
-          for (const [id, agent] of this.store) {
-            if (agent.isExternal && !workspaceDirs.has(agent.projectDir)) {
-              toRemove.push(id);
-            }
-          }
-          for (const id of toRemove) {
-            const agent = this.store.get(id);
-            if (agent) {
-              this.runtime.dismissalTracker.dismiss(agent.jsonlFile);
-              this.globalDismissedFiles.add(agent.jsonlFile);
-              this.runtime.knownJsonlFiles.delete(agent.jsonlFile);
-            }
-            this.runtime.removeAgent(id);
-          }
-        }
-      } else if (message.type === 'webviewReady') {
-        // Flush any messages buffered while the iframe was loading. Mark
-        // ready BEFORE flush so re-entrant broadcasts (triggered by handlers
-        // below) go directly. Order is preserved: buffered first, new second.
-        this.isWebviewReady = true;
-        const buffered = this.pendingBroadcasts;
-        this.pendingBroadcasts = [];
-        for (const msg of buffered) {
-          this.webview?.postMessage(msg);
-        }
-        // Provider capabilities: tool taxonomy for webview animation + subagent rendering.
-        // Sent once before restoreAgents so characters render with correct animations
-        // from the first frame. Union over every registered provider (see
-        // clientMessageHandler.ts): tool names are provider-namespaced by case
-        // convention, so the union classifies correctly with no per-agent routing.
-        this.webview?.postMessage({
-          type: 'providerCapabilities',
-          readingTools: [...new Set(hookProviders.flatMap((p) => [...p.readingTools]))],
-          subagentToolNames: [...new Set(hookProviders.flatMap((p) => [...p.subagentToolNames]))],
-        });
-
-        // Settings + Directory→Area mappings MUST be dispatched BEFORE restoreAgents
-        // and the auto-spawn path. Both paths emit `agentCreated` postMessages via
-        // AgentStateStore events; the webview's handler routes each agent through
-        // OfficeState.findFreeSeat(directoryName), which depends on `areaMappings`.
-        // If we restore agents first, Stage-1 (in-Area) is silently skipped for
-        // restored / auto-spawned agents and their preferred Area placement is lost.
-        const soundEnabled = this.adapter.getSetting<boolean>(GLOBAL_KEY_SOUND_ENABLED, true);
-        const lastSeenVersion = this.adapter.getSetting<string>(GLOBAL_KEY_LAST_SEEN_VERSION, '');
-        const extensionVersion =
-          (this.context.extension.packageJSON as { version?: string }).version ?? '';
-        const watchAllSessions = this.adapter.getSetting<boolean>(
-          GLOBAL_KEY_WATCH_ALL_SESSIONS,
-          false,
-        );
-        const alwaysShowLabels = this.adapter.getSetting<boolean>(
-          GLOBAL_KEY_ALWAYS_SHOW_LABELS,
-          false,
-        );
-        const ghostHeadlessAgents = this.adapter.getSetting<boolean>(
-          GLOBAL_KEY_GHOST_HEADLESS_AGENTS,
-          false,
-        );
-        this.runtime.watchAllSessions.current = watchAllSessions;
-        // settingsLoaded.hooksEnabled stays a single boolean carrying the
-        // CLAUDE provider's preference until the Settings UI grows a
-        // per-provider list — its sole webview reader is the hooks tooltip.
-        const hooksEnabled = getHooksEnabled(claudeProvider.id);
-        const hooksInfoShown = this.adapter.getSetting<boolean>(GLOBAL_KEY_HOOKS_INFO_SHOWN, false);
-        const showAreas = this.adapter.getSetting<boolean>(GLOBAL_KEY_SHOW_AREAS, false);
-        const bypassPermissions = this.adapter.getSetting<boolean>(
-          GLOBAL_KEY_BYPASS_PERMISSIONS,
-          false,
-        );
-        const showHostDirectories = this.adapter.getSetting<boolean>(
-          GLOBAL_KEY_SHOW_HOST_DIRECTORIES,
-          false,
-        );
-        const config = readConfig();
-        this.webview?.postMessage({
-          type: 'settingsLoaded',
-          soundEnabled,
-          lastSeenVersion,
-          extensionVersion,
-          watchAllSessions,
-          alwaysShowLabels,
-          ghostHeadlessAgents,
-          hooksEnabled,
-          hooksInfoShown,
-          externalAssetDirectories: config.externalAssetDirectories,
-          showAreas,
-          bypassPermissions,
-          showHostDirectories,
-        });
-
-        // One status + at most one consent ask PER PROVIDER. Install state is distinct from the hooksEnabled
-        // preference, which defaults true while consent is pending. Opening the office is the moment the user can be
-        // asked, so the ask rides this handshake; consentGate owns every condition (standalone calls the same
-        // function). Dismissing sends nothing and re-asks next handshake; either durable answer closes the gate for
-        // good. An embedded webview is privileged by construction — our own iframe, reached through no socket.
-        for (const provider of hookProviders) {
-          // One provider's unreadable settings file degrades to installed=false (the executor's fail-closed read: no
-          // choice uninstalls on a guess) rather than aborting the handshake before restored agents are sent, or
-          // blocking the other providers' statuses.
-          const installed = await provider.areHooksInstalled().catch((err: unknown) => {
-            console.error(
-              `[Pixel Agents] hooks status check failed for provider ${provider.id}:`,
-              err,
-            );
-            return false;
-          });
-          this.webview?.postMessage({
-            type: 'hooksStatus',
-            providerId: provider.id,
-            installed,
-          });
-          const consentRequest = hooksConsentRequest(
-            {
-              installed,
-              hooksEnabled: getHooksEnabled(provider.id),
-              consentAnswered: getHooksConsent(provider.id) !== 'unanswered',
-              privileged: true,
-              // Same isPresent retirement the standalone handshake applies
-              // (clientMessageHandler.ts): an uninstalled CLI cannot be evaluated
-              // by the user, so without this every fresh profile gets asks (and
-              // an Intro greeter character) for CLIs it does not have.
-              present: provider.isPresent?.() ?? true,
-            },
-            provider,
-          );
-          if (consentRequest) this.webview?.postMessage(consentRequest);
-        }
-
-        // Directory→Area mappings (must arrive before any agentCreated/existingAgents
-        // so OfficeState.findFreeSeat has the dict when characters are placed).
-        this.webview?.postMessage({
-          type: 'areaMappingsLoaded',
-          mappings: config.vscode.areaMappings ?? {},
-        });
-
-        restoreAgents(
-          this.adapter,
-          this.store.nextAgentId,
-          this.store.nextTerminalIndex,
-          this.store,
-          this.runtime.knownJsonlFiles,
-          this.runtime.fileWatchers,
-          this.runtime.pollingTimers,
-          this.runtime.waitingTimers,
-          this.runtime.permissionTimers,
-          this.runtime.jsonlPollTimers,
-          this.runtime.projectScanTimer,
-          this.runtime.activeAgentId,
-        );
-        // Register all restored agents with hook handler
-        for (const agent of this.store.values()) {
-          this.runtime.registerAgent(agent.sessionId, agent.id);
-        }
-
-        // Auto-spawn: launch one agent on first webviewReady if the setting is
-        // enabled and no agents are currently running.
-        if (
-          !this.autoSpawnAttempted &&
-          vscode.workspace.getConfiguration().get<boolean>(CONFIG_KEY_AUTO_SPAWN_AGENT, false) &&
-          this.store.size === 0
-        ) {
-          this.autoSpawnAttempted = true;
-          console.log('[Pixel Agents] Auto-spawning agent on startup');
-          // When the user also opted into autoShowPanel, skip terminal.show()
-          // so the panel view stays on Pixel Agents. The terminal still runs;
-          // clicking the character focuses it via the focusAgent handler.
-          const autoShowPanel = vscode.workspace
-            .getConfiguration()
-            .get<boolean>(CONFIG_KEY_AUTO_SHOW_PANEL, false);
+    this.viewEventListeners.push(
+      webviewView.webview.onDidReceiveMessage(async (message) => {
+        if (message.type === 'launchAgent') {
           const prevAgentIds = new Set(this.store.keys());
           await launchNewTerminal(
             this.store.nextAgentId,
@@ -795,261 +494,580 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
             this.runtime.jsonlPollTimers,
             this.runtime.projectScanTimer,
             () => this.store.persist(),
-            undefined,
-            // Auto-spawn is a launch like any other, so it runs under the same
-            // persisted permission posture.
-            bypassPermissions,
-            autoShowPanel,
+            // Every launch comes from a drawer row and carries its Directory's
+            // path; no directoryPath leaves launchNewTerminal's own fallback —
+            // the first workspace folder — exactly as it was.
+            message.directoryPath as string | undefined,
+            // Permission posture is a persisted per-host setting, never a
+            // per-launch field: the webview sends only where to launch.
+            this.adapter.getSetting<boolean>(GLOBAL_KEY_BYPASS_PERMISSIONS, false),
           );
+          // Register newly created agent(s) with hook handler
           for (const [id, agent] of this.store) {
             if (!prevAgentIds.has(id)) {
               this.runtime.registerAgent(agent.sessionId, id);
             }
           }
-        } else {
-          // Mark as attempted even when skipping, so subsequent panel focuses
-          // (which retrigger webviewReady) never auto-spawn unexpectedly.
-          this.autoSpawnAttempted = true;
-        }
-
-        // Contribute the host's native context as read-only Directories — every
-        // workspace folder, single-root included (the counterpart of standalone
-        // contributing its start directory) — merged with the user-defined ones
-        // from the machine-wide config. Sent unconditionally: user-defined
-        // Directories exist even in a window with no folder open. What a plain
-        // "+ Agent" tap does depends on the Default directory — see BottomToolbar.
-        this.sendDirectories();
-
-        // Ensure project scan runs even with no restored agents (to adopt external terminals)
-        const wsFolders = vscode.workspace.workspaceFolders;
-        const projectDir = getProjectDirPath();
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        console.log(`[Pixel Agents] Debug: Platform: ${process.platform}, arch: ${process.arch}`);
-        console.log('[Extension] workspaceRoot:', workspaceRoot);
-        console.log('[Extension] projectDir:', projectDir);
-        this.runtime.startProjectScan(projectDir);
-
-        // Start external session scanning (detects VS Code extension panel sessions)
-        this.runtime.startExternalScanning(projectDir);
-
-        // In multi-root workspaces, also scan project dirs for all other folders
-        // so agents running in any workspace folder are discovered
-        if (wsFolders && wsFolders.length > 1) {
-          for (const folder of wsFolders) {
-            const folderProjectDir = getProjectDirPath(folder.uri.fsPath);
-            if (folderProjectDir && folderProjectDir !== projectDir) {
-              console.log(`[Pixel Agents] Registering additional project dir: ${folderProjectDir}`);
-              this.runtime.startProjectScan(folderProjectDir);
-            }
-          }
-        }
-
-        this.runtime.startStaleCheck();
-
-        // Load furniture assets BEFORE sending layout
-        (async () => {
-          try {
-            console.log('[Extension] Loading furniture assets...');
-            const extensionPath = this.extensionUri.fsPath;
-            console.log('[Extension] extensionPath:', extensionPath);
-
-            // Check bundled location first: extensionPath/dist/assets/
-            const bundledAssetsDir = path.join(extensionPath, 'dist', 'assets');
-            let assetsRoot: string | null = null;
-            if (fs.existsSync(bundledAssetsDir)) {
-              console.log('[Extension] Found bundled assets at dist/');
-              assetsRoot = path.join(extensionPath, 'dist');
-            } else if (workspaceRoot) {
-              // Fall back to workspace root (development or external assets)
-              console.log('[Extension] Trying workspace for assets...');
-              assetsRoot = workspaceRoot;
-            }
-
-            if (!assetsRoot) {
-              console.log('[Extension] ⚠️  No assets directory found');
-              if (this.webview) {
-                sendLayout(this.webview, this.defaultLayout);
-                // Send agent statuses AFTER layoutLoaded so characters exist when messages arrive
-                sendCurrentAgentStatuses(this.store, this.webview);
-                this.startLayoutWatcher();
+        } else if (message.type === 'focusAgent') {
+          const agent = this.store.get(message.id);
+          if (agent) {
+            if (agent.terminalRef) {
+              agent.terminalRef.show();
+            } else if (agent.leadAgentId !== undefined) {
+              // Teammate (tmux): focus the lead's terminal instead
+              const lead = this.store.get(agent.leadAgentId);
+              if (lead?.terminalRef) {
+                lead.terminalRef.show();
               }
-              return;
             }
-
-            console.log('[Extension] Using assetsRoot:', assetsRoot);
-            this.assetsRoot = assetsRoot;
-
-            // Load bundled default layout
-            this.defaultLayout = loadDefaultLayout(assetsRoot);
-
-            // Load character sprites (bundled + external)
-            const charSprites = await this.loadAllCharacterSprites();
-            if (charSprites && this.webview) {
-              console.log(
-                `[Extension] ${charSprites.characters.length} character sprites loaded, sending to webview`,
-              );
-              sendCharacterSpritesToWebview(this.webview, charSprites);
-            }
-
-            // Load pet sprites (bundled + external)
-            const petSprites = await this.loadAllPetSprites();
-            if (petSprites && this.webview) {
-              console.log(
-                `[Extension] ${petSprites.pets.length} pet sprites loaded, sending to webview`,
-              );
-              sendPetSpritesToWebview(this.webview, petSprites);
-            }
-
-            // Load floor tiles
-            const floorTiles = await loadFloorTiles(assetsRoot);
-            if (floorTiles && this.webview) {
-              console.log('[Extension] Floor tiles loaded, sending to webview');
-              sendFloorTilesToWebview(this.webview, floorTiles);
-            }
-
-            // Load wall tiles
-            const wallTiles = await loadWallTiles(assetsRoot);
-            if (wallTiles && this.webview) {
-              console.log('[Extension] Wall tiles loaded, sending to webview');
-              sendWallTilesToWebview(this.webview, wallTiles);
-            }
-
-            // Load carpet tiles (auto-tile sprite sets, 3 demo variants by default)
-            const carpetTiles = await loadCarpetTiles(assetsRoot);
-            if (carpetTiles && this.webview) {
-              console.log('[Extension] Carpet tiles loaded, sending to webview');
-              sendCarpetTilesToWebview(this.webview, carpetTiles);
-            }
-
-            const assets = await this.loadAllFurnitureAssets();
-            if (assets && this.webview) {
-              console.log('[Extension] ✅ Assets loaded, sending to webview');
-              sendAssetsToWebview(this.webview, assets);
-            }
-          } catch (err) {
-            console.error('[Extension] ❌ Error loading assets:', err);
           }
-          // Always send saved layout (or null for default)
-          if (this.webview) {
-            console.log('[Extension] Sending saved layout');
-            sendLayout(this.webview, this.defaultLayout);
-            // Send agent statuses AFTER layoutLoaded so characters exist when messages arrive
-            sendCurrentAgentStatuses(this.store, this.webview);
-            this.startLayoutWatcher();
+        } else if (message.type === 'closeAgent') {
+          const agent = this.store.get(message.id);
+          if (agent) {
+            if (agent.terminalRef) {
+              agent.terminalRef.dispose();
+            } else {
+              // External agent -- remove from tracking and dismiss the file
+              // so the external scanner doesn't re-adopt it
+              this.runtime.dismissalTracker.dismiss(agent.jsonlFile);
+              this.runtime.removeAgent(message.id);
+            }
           }
-        })();
-        sendExistingAgents(this.store, this.adapter, this.webview);
-      } else if (message.type === 'requestDiagnostics') {
-        // Send connection diagnostics for all agents to the Debug View
-        this.webview?.postMessage({
-          type: 'agentDiagnostics',
-          agents: buildAgentDiagnostics(this.store),
-        });
-      } else if (message.type === 'openSessionsFolder') {
-        const projectDir = getProjectDirPath();
-        if (projectDir && fs.existsSync(projectDir)) {
-          vscode.env.openExternal(vscode.Uri.file(projectDir));
-        }
-      } else if (message.type === 'exportLayout') {
-        const layout = readLayoutFromFile();
-        if (!layout) {
-          vscode.window.showWarningMessage('Pixel Agents: No saved layout to export.');
-          return;
-        }
-        const uri = await vscode.window.showSaveDialog({
-          filters: { 'JSON Files': ['json'] },
-          defaultUri: vscode.Uri.file(path.join(os.homedir(), 'pixel-agents-layout.json')),
-        });
-        if (uri) {
-          fs.writeFileSync(uri.fsPath, JSON.stringify(layout, null, 2), 'utf-8');
-          vscode.window.showInformationMessage('Pixel Agents: Layout exported successfully.');
-        }
-      } else if (message.type === 'addExternalAssetDirectory') {
-        const uris = await vscode.window.showOpenDialog({
-          canSelectFolders: true,
-          canSelectFiles: false,
-          canSelectMany: false,
-          openLabel: 'Select Asset Directory',
-        });
-        if (!uris || uris.length === 0) return;
-        const newPath = uris[0].fsPath;
-        const cfg = readConfig();
-        if (!cfg.externalAssetDirectories.includes(newPath)) {
-          cfg.externalAssetDirectories.push(newPath);
+        } else if (message.type === 'saveAgentSeats') {
+          // Store seat assignments in a separate key (never touched by persistAgents)
+          console.log(`[Pixel Agents] State: saveAgentSeats:`, JSON.stringify(message.seats));
+          this.adapter.saveSeats(message.seats);
+        } else if (message.type === 'saveLayout') {
+          this.layoutWatcher?.markOwnWrite();
+          writeLayoutToFile(message.layout as Record<string, unknown>);
+        } else if (message.type === 'setSoundEnabled') {
+          this.adapter.setSetting(GLOBAL_KEY_SOUND_ENABLED, message.enabled);
+        } else if (message.type === 'setLastSeenVersion') {
+          this.adapter.setSetting(GLOBAL_KEY_LAST_SEEN_VERSION, message.version as string);
+        } else if (message.type === 'setAlwaysShowLabels') {
+          this.adapter.setSetting(GLOBAL_KEY_ALWAYS_SHOW_LABELS, message.enabled);
+        } else if (message.type === 'setGhostHeadlessAgents') {
+          this.adapter.setSetting(GLOBAL_KEY_GHOST_HEADLESS_AGENTS, message.enabled);
+        } else if (message.type === 'setHooksEnabled') {
+          // The provider id is echoed by the webview, never originated; an
+          // unknown id names nothing to install into, so it is dropped like a
+          // junk consent choice.
+          const provider = hookProviderById(message.providerId);
+          if (provider) void this.setHooksEnabled(provider, message.enabled as boolean);
+        } else if (message.type === 'hooksConsentResponse') {
+          const provider = hookProviderById(message.providerId);
+          if (provider) {
+            void applyConsentChoice(provider.id, message.choice, this.consentEffects(provider));
+          }
+        } else if (message.type === 'setHooksInfoShown') {
+          this.adapter.setSetting(GLOBAL_KEY_HOOKS_INFO_SHOWN, true);
+        } else if (message.type === 'setShowAreas') {
+          const enabled = message.enabled as boolean;
+          this.adapter.setSetting(GLOBAL_KEY_SHOW_AREAS, enabled);
+        } else if (
+          message.type === 'saveDirectory' ||
+          message.type === 'removeDirectory' ||
+          message.type === 'requestDirectorySuggestions'
+        ) {
+          // Shared with the standalone host: same validation, same union, same
+          // machine-wide config. This surface has a single office, so the
+          // rebroadcast and the point-to-point reply are the same channel.
+          handleDirectoryClientMessage(message as Record<string, unknown>, {
+            hostDirectories: () => this.shownHostDirectories(),
+            broadcast: (m) => this.sendOrBuffer(m),
+            reply: (m) => this.sendOrBuffer(m),
+            suggestions: () =>
+              collectDirectorySuggestions(claudeProvider, this.shownHostDirectories()),
+          });
+        } else if (message.type === 'setShowHostDirectories') {
+          if (typeof message.enabled === 'boolean') {
+            this.adapter.setSetting(GLOBAL_KEY_SHOW_HOST_DIRECTORIES, message.enabled);
+            this.sendDirectories();
+          }
+        } else if (message.type === 'setBypassPermissions') {
+          if (typeof message.enabled === 'boolean') {
+            this.adapter.setSetting(GLOBAL_KEY_BYPASS_PERMISSIONS, message.enabled);
+            // Through the store, not straight to the webview: the store's
+            // broadcast also reaches offices on the embedded server's /ws, which
+            // launch under this same posture.
+            this.store.broadcast({
+              type: 'bypassPermissionsUpdated',
+              enabled: this.adapter.getSetting<boolean>(GLOBAL_KEY_BYPASS_PERMISSIONS, false),
+            });
+          }
+        } else if (message.type === 'saveAreaMappings') {
+          const mappings = message.mappings as Record<string, string[]>;
+          const cfg = readConfig();
+          cfg.vscode.areaMappings = mappings;
           writeConfig(cfg);
-        }
-        await this.reloadAndSendCharacters();
-        await this.reloadAndSendPets();
-        await this.reloadAndSendFurniture();
-        this.webview?.postMessage({
-          type: 'externalAssetDirectoriesUpdated',
-          dirs: cfg.externalAssetDirectories,
-        });
-      } else if (message.type === 'removeExternalAssetDirectory') {
-        const cfg = readConfig();
-        cfg.externalAssetDirectories = cfg.externalAssetDirectories.filter(
-          (d) => d !== (message.path as string),
-        );
-        writeConfig(cfg);
-        await this.reloadAndSendCharacters();
-        await this.reloadAndSendPets();
-        await this.reloadAndSendFurniture();
-        this.webview?.postMessage({
-          type: 'externalAssetDirectoriesUpdated',
-          dirs: cfg.externalAssetDirectories,
-        });
-      } else if (message.type === 'importLayout') {
-        const uris = await vscode.window.showOpenDialog({
-          filters: { 'JSON Files': ['json'] },
-          canSelectMany: false,
-        });
-        if (!uris || uris.length === 0) return;
-        try {
-          const raw = fs.readFileSync(uris[0].fsPath, 'utf-8');
-          const imported = JSON.parse(raw) as Record<string, unknown>;
-          if (imported.version !== 1 || !Array.isArray(imported.tiles)) {
-            vscode.window.showErrorMessage('Pixel Agents: Invalid layout file.');
+        } else if (message.type === 'setWatchAllSessions') {
+          const enabled = message.enabled as boolean;
+          this.adapter.setSetting(GLOBAL_KEY_WATCH_ALL_SESSIONS, enabled);
+          this.runtime.watchAllSessions.current = enabled;
+          if (enabled) {
+            // Clear only toggle-specific dismissals so global agents can be re-adopted
+            for (const file of this.globalDismissedFiles) {
+              this.runtime.dismissalTracker.clearDismissal(file);
+            }
+            this.globalDismissedFiles.clear();
+          } else {
+            // Remove all external agents not from the current workspace folders.
+            // PathSet: an agent adopted via hooks carries Claude's spelling of the
+            // project dir, which differs from VS Code's by drive-letter case on Windows.
+            const workspaceDirs = new PathSet();
+            for (const folder of vscode.workspace.workspaceFolders ?? []) {
+              const dir = getProjectDirPath(folder.uri.fsPath);
+              if (dir) workspaceDirs.add(dir);
+            }
+            const toRemove: number[] = [];
+            for (const [id, agent] of this.store) {
+              if (agent.isExternal && !workspaceDirs.has(agent.projectDir)) {
+                toRemove.push(id);
+              }
+            }
+            for (const id of toRemove) {
+              const agent = this.store.get(id);
+              if (agent) {
+                this.runtime.dismissalTracker.dismiss(agent.jsonlFile);
+                this.globalDismissedFiles.add(agent.jsonlFile);
+                this.runtime.knownJsonlFiles.delete(agent.jsonlFile);
+              }
+              this.runtime.removeAgent(id);
+            }
+          }
+        } else if (message.type === 'webviewReady') {
+          // Flush any messages buffered while the iframe was loading. Mark
+          // ready BEFORE flush so re-entrant broadcasts (triggered by handlers
+          // below) go directly. Order is preserved: buffered first, new second.
+          this.isWebviewReady = true;
+          const buffered = this.pendingBroadcasts;
+          this.pendingBroadcasts = [];
+          for (const msg of buffered) {
+            this.webview?.postMessage(msg);
+          }
+          // Provider capabilities: tool taxonomy for webview animation + subagent rendering.
+          // Sent once before restoreAgents so characters render with correct animations
+          // from the first frame. Union over every registered provider (see
+          // clientMessageHandler.ts): tool names are provider-namespaced by case
+          // convention, so the union classifies correctly with no per-agent routing.
+          this.webview?.postMessage({
+            type: 'providerCapabilities',
+            readingTools: [...new Set(hookProviders.flatMap((p) => [...p.readingTools]))],
+            subagentToolNames: [...new Set(hookProviders.flatMap((p) => [...p.subagentToolNames]))],
+          });
+
+          // Settings + Directory→Area mappings MUST be dispatched BEFORE restoreAgents
+          // and the auto-spawn path. Both paths emit `agentCreated` postMessages via
+          // AgentStateStore events; the webview's handler routes each agent through
+          // OfficeState.findFreeSeat(directoryName), which depends on `areaMappings`.
+          // If we restore agents first, Stage-1 (in-Area) is silently skipped for
+          // restored / auto-spawned agents and their preferred Area placement is lost.
+          const soundEnabled = this.adapter.getSetting<boolean>(GLOBAL_KEY_SOUND_ENABLED, true);
+          const lastSeenVersion = this.adapter.getSetting<string>(GLOBAL_KEY_LAST_SEEN_VERSION, '');
+          const extensionVersion =
+            (this.context.extension.packageJSON as { version?: string }).version ?? '';
+          const watchAllSessions = this.adapter.getSetting<boolean>(
+            GLOBAL_KEY_WATCH_ALL_SESSIONS,
+            false,
+          );
+          const alwaysShowLabels = this.adapter.getSetting<boolean>(
+            GLOBAL_KEY_ALWAYS_SHOW_LABELS,
+            false,
+          );
+          const ghostHeadlessAgents = this.adapter.getSetting<boolean>(
+            GLOBAL_KEY_GHOST_HEADLESS_AGENTS,
+            false,
+          );
+          this.runtime.watchAllSessions.current = watchAllSessions;
+          // settingsLoaded.hooksEnabled stays a single boolean carrying the
+          // CLAUDE provider's preference until the Settings UI grows a
+          // per-provider list — its sole webview reader is the hooks tooltip.
+          const hooksEnabled = getHooksEnabled(claudeProvider.id);
+          const hooksInfoShown = this.adapter.getSetting<boolean>(
+            GLOBAL_KEY_HOOKS_INFO_SHOWN,
+            false,
+          );
+          const showAreas = this.adapter.getSetting<boolean>(GLOBAL_KEY_SHOW_AREAS, false);
+          const bypassPermissions = this.adapter.getSetting<boolean>(
+            GLOBAL_KEY_BYPASS_PERMISSIONS,
+            false,
+          );
+          const showHostDirectories = this.adapter.getSetting<boolean>(
+            GLOBAL_KEY_SHOW_HOST_DIRECTORIES,
+            false,
+          );
+          const config = readConfig();
+          this.webview?.postMessage({
+            type: 'settingsLoaded',
+            soundEnabled,
+            lastSeenVersion,
+            extensionVersion,
+            watchAllSessions,
+            alwaysShowLabels,
+            ghostHeadlessAgents,
+            hooksEnabled,
+            hooksInfoShown,
+            externalAssetDirectories: config.externalAssetDirectories,
+            showAreas,
+            bypassPermissions,
+            showHostDirectories,
+          });
+
+          // One status + at most one consent ask PER PROVIDER. Install state is distinct from the hooksEnabled
+          // preference, which defaults true while consent is pending. Opening the office is the moment the user can be
+          // asked, so the ask rides this handshake; consentGate owns every condition (standalone calls the same
+          // function). Dismissing sends nothing and re-asks next handshake; either durable answer closes the gate for
+          // good. An embedded webview is privileged by construction — our own iframe, reached through no socket.
+          for (const provider of hookProviders) {
+            // One provider's unreadable settings file degrades to installed=false (the executor's fail-closed read: no
+            // choice uninstalls on a guess) rather than aborting the handshake before restored agents are sent, or
+            // blocking the other providers' statuses.
+            const installed = await provider.areHooksInstalled().catch((err: unknown) => {
+              console.error(
+                `[Pixel Agents] hooks status check failed for provider ${provider.id}:`,
+                err,
+              );
+              return false;
+            });
+            this.webview?.postMessage({
+              type: 'hooksStatus',
+              providerId: provider.id,
+              installed,
+            });
+            const consentRequest = hooksConsentRequest(
+              {
+                installed,
+                hooksEnabled: getHooksEnabled(provider.id),
+                consentAnswered: getHooksConsent(provider.id) !== 'unanswered',
+                privileged: true,
+                // Same isPresent retirement the standalone handshake applies
+                // (clientMessageHandler.ts): an uninstalled CLI cannot be evaluated
+                // by the user, so without this every fresh profile gets asks (and
+                // an Intro greeter character) for CLIs it does not have.
+                present: provider.isPresent?.() ?? true,
+              },
+              provider,
+            );
+            if (consentRequest) this.webview?.postMessage(consentRequest);
+          }
+
+          // Directory→Area mappings (must arrive before any agentCreated/existingAgents
+          // so OfficeState.findFreeSeat has the dict when characters are placed).
+          this.webview?.postMessage({
+            type: 'areaMappingsLoaded',
+            mappings: config.vscode.areaMappings ?? {},
+          });
+
+          restoreAgents(
+            this.adapter,
+            this.store.nextAgentId,
+            this.store.nextTerminalIndex,
+            this.store,
+            this.runtime.knownJsonlFiles,
+            this.runtime.fileWatchers,
+            this.runtime.pollingTimers,
+            this.runtime.waitingTimers,
+            this.runtime.permissionTimers,
+            this.runtime.jsonlPollTimers,
+            this.runtime.projectScanTimer,
+            this.runtime.activeAgentId,
+          );
+          // Register all restored agents with hook handler
+          for (const agent of this.store.values()) {
+            this.runtime.registerAgent(agent.sessionId, agent.id);
+          }
+
+          // Auto-spawn: launch one agent on first webviewReady if the setting is
+          // enabled and no agents are currently running.
+          if (
+            !this.autoSpawnAttempted &&
+            vscode.workspace.getConfiguration().get<boolean>(CONFIG_KEY_AUTO_SPAWN_AGENT, false) &&
+            this.store.size === 0
+          ) {
+            this.autoSpawnAttempted = true;
+            console.log('[Pixel Agents] Auto-spawning agent on startup');
+            // When the user also opted into autoShowPanel, skip terminal.show()
+            // so the panel view stays on Pixel Agents. The terminal still runs;
+            // clicking the character focuses it via the focusAgent handler.
+            const autoShowPanel = vscode.workspace
+              .getConfiguration()
+              .get<boolean>(CONFIG_KEY_AUTO_SHOW_PANEL, false);
+            const prevAgentIds = new Set(this.store.keys());
+            await launchNewTerminal(
+              this.store.nextAgentId,
+              this.store.nextTerminalIndex,
+              this.store,
+              this.runtime.activeAgentId,
+              this.runtime.knownJsonlFiles,
+              this.runtime.fileWatchers,
+              this.runtime.pollingTimers,
+              this.runtime.waitingTimers,
+              this.runtime.permissionTimers,
+              this.runtime.jsonlPollTimers,
+              this.runtime.projectScanTimer,
+              () => this.store.persist(),
+              undefined,
+              // Auto-spawn is a launch like any other, so it runs under the same
+              // persisted permission posture.
+              bypassPermissions,
+              autoShowPanel,
+            );
+            for (const [id, agent] of this.store) {
+              if (!prevAgentIds.has(id)) {
+                this.runtime.registerAgent(agent.sessionId, id);
+              }
+            }
+          } else {
+            // Mark as attempted even when skipping, so subsequent panel focuses
+            // (which retrigger webviewReady) never auto-spawn unexpectedly.
+            this.autoSpawnAttempted = true;
+          }
+
+          // Contribute the host's native context as read-only Directories — every
+          // workspace folder, single-root included (the counterpart of standalone
+          // contributing its start directory) — merged with the user-defined ones
+          // from the machine-wide config. Sent unconditionally: user-defined
+          // Directories exist even in a window with no folder open. What a plain
+          // "+ Agent" tap does depends on the Default directory — see BottomToolbar.
+          this.sendDirectories();
+
+          // Ensure project scan runs even with no restored agents (to adopt external terminals)
+          const wsFolders = vscode.workspace.workspaceFolders;
+          const projectDir = getProjectDirPath();
+          const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          console.log(`[Pixel Agents] Debug: Platform: ${process.platform}, arch: ${process.arch}`);
+          console.log('[Extension] workspaceRoot:', workspaceRoot);
+          console.log('[Extension] projectDir:', projectDir);
+          this.runtime.startProjectScan(projectDir);
+
+          // Start external session scanning (detects VS Code extension panel sessions)
+          this.runtime.startExternalScanning(projectDir);
+
+          // In multi-root workspaces, also scan project dirs for all other folders
+          // so agents running in any workspace folder are discovered
+          if (wsFolders && wsFolders.length > 1) {
+            for (const folder of wsFolders) {
+              const folderProjectDir = getProjectDirPath(folder.uri.fsPath);
+              if (folderProjectDir && folderProjectDir !== projectDir) {
+                console.log(
+                  `[Pixel Agents] Registering additional project dir: ${folderProjectDir}`,
+                );
+                this.runtime.startProjectScan(folderProjectDir);
+              }
+            }
+          }
+
+          this.runtime.startStaleCheck();
+
+          // Load furniture assets BEFORE sending layout
+          (async () => {
+            try {
+              console.log('[Extension] Loading furniture assets...');
+              const extensionPath = this.extensionUri.fsPath;
+              console.log('[Extension] extensionPath:', extensionPath);
+
+              // Check bundled location first: extensionPath/dist/assets/
+              const bundledAssetsDir = path.join(extensionPath, 'dist', 'assets');
+              let assetsRoot: string | null = null;
+              if (fs.existsSync(bundledAssetsDir)) {
+                console.log('[Extension] Found bundled assets at dist/');
+                assetsRoot = path.join(extensionPath, 'dist');
+              } else if (workspaceRoot) {
+                // Fall back to workspace root (development or external assets)
+                console.log('[Extension] Trying workspace for assets...');
+                assetsRoot = workspaceRoot;
+              }
+
+              if (!assetsRoot) {
+                console.log('[Extension] ⚠️  No assets directory found');
+                if (this.webview) {
+                  sendLayout(this.webview, this.defaultLayout);
+                  // Send agent statuses AFTER layoutLoaded so characters exist when messages arrive
+                  sendCurrentAgentStatuses(this.store, this.webview);
+                  this.startLayoutWatcher();
+                }
+                return;
+              }
+
+              console.log('[Extension] Using assetsRoot:', assetsRoot);
+              this.assetsRoot = assetsRoot;
+
+              // Load bundled default layout
+              this.defaultLayout = loadDefaultLayout(assetsRoot);
+
+              // Load character sprites (bundled + external)
+              const charSprites = await this.loadAllCharacterSprites();
+              if (charSprites && this.webview) {
+                console.log(
+                  `[Extension] ${charSprites.characters.length} character sprites loaded, sending to webview`,
+                );
+                sendCharacterSpritesToWebview(this.webview, charSprites);
+              }
+
+              // Load pet sprites (bundled + external)
+              const petSprites = await this.loadAllPetSprites();
+              if (petSprites && this.webview) {
+                console.log(
+                  `[Extension] ${petSprites.pets.length} pet sprites loaded, sending to webview`,
+                );
+                sendPetSpritesToWebview(this.webview, petSprites);
+              }
+
+              // Load floor tiles
+              const floorTiles = await loadFloorTiles(assetsRoot);
+              if (floorTiles && this.webview) {
+                console.log('[Extension] Floor tiles loaded, sending to webview');
+                sendFloorTilesToWebview(this.webview, floorTiles);
+              }
+
+              // Load wall tiles
+              const wallTiles = await loadWallTiles(assetsRoot);
+              if (wallTiles && this.webview) {
+                console.log('[Extension] Wall tiles loaded, sending to webview');
+                sendWallTilesToWebview(this.webview, wallTiles);
+              }
+
+              // Load carpet tiles (auto-tile sprite sets, 3 demo variants by default)
+              const carpetTiles = await loadCarpetTiles(assetsRoot);
+              if (carpetTiles && this.webview) {
+                console.log('[Extension] Carpet tiles loaded, sending to webview');
+                sendCarpetTilesToWebview(this.webview, carpetTiles);
+              }
+
+              const assets = await this.loadAllFurnitureAssets();
+              if (assets && this.webview) {
+                console.log('[Extension] ✅ Assets loaded, sending to webview');
+                sendAssetsToWebview(this.webview, assets);
+              }
+            } catch (err) {
+              console.error('[Extension] ❌ Error loading assets:', err);
+            }
+            // Always send saved layout (or null for default)
+            if (this.webview) {
+              console.log('[Extension] Sending saved layout');
+              sendLayout(this.webview, this.defaultLayout);
+              // Send agent statuses AFTER layoutLoaded so characters exist when messages arrive
+              sendCurrentAgentStatuses(this.store, this.webview);
+              this.startLayoutWatcher();
+            }
+          })();
+          sendExistingAgents(this.store, this.adapter, this.webview);
+        } else if (message.type === 'requestDiagnostics') {
+          // Send connection diagnostics for all agents to the Debug View
+          this.webview?.postMessage({
+            type: 'agentDiagnostics',
+            agents: buildAgentDiagnostics(this.store),
+          });
+        } else if (message.type === 'openSessionsFolder') {
+          const projectDir = getProjectDirPath();
+          if (projectDir && fs.existsSync(projectDir)) {
+            vscode.env.openExternal(vscode.Uri.file(projectDir));
+          }
+        } else if (message.type === 'exportLayout') {
+          const layout = readLayoutFromFile();
+          if (!layout) {
+            vscode.window.showWarningMessage('Pixel Agents: No saved layout to export.');
             return;
           }
-          this.layoutWatcher?.markOwnWrite();
-          writeLayoutToFile(imported);
-          this.webview?.postMessage({ type: 'layoutLoaded', layout: imported });
-          vscode.window.showInformationMessage('Pixel Agents: Layout imported successfully.');
-        } catch {
-          vscode.window.showErrorMessage('Pixel Agents: Failed to read or parse layout file.');
-        }
-      }
-    });
-
-    vscode.window.onDidChangeActiveTerminal((terminal) => {
-      if (!terminal) return;
-      this.runtime.activeAgentId.current = null;
-      for (const [id, agent] of this.store) {
-        if (agent.terminalRef && agent.terminalRef === terminal) {
-          this.runtime.activeAgentId.current = id;
-          webviewView.webview.postMessage({ type: 'agentSelected', id });
-          break;
-        }
-      }
-    });
-
-    vscode.window.onDidCloseTerminal((closed) => {
-      for (const [id, agent] of this.store) {
-        if (agent.terminalRef && agent.terminalRef === closed) {
-          if (this.runtime.activeAgentId.current === id) {
-            this.runtime.activeAgentId.current = null;
+          const uri = await vscode.window.showSaveDialog({
+            filters: { 'JSON Files': ['json'] },
+            defaultUri: vscode.Uri.file(path.join(os.homedir(), 'pixel-agents-layout.json')),
+          });
+          if (uri) {
+            fs.writeFileSync(uri.fsPath, JSON.stringify(layout, null, 2), 'utf-8');
+            vscode.window.showInformationMessage('Pixel Agents: Layout exported successfully.');
           }
-          // If this is a team lead, remove its teammates
-          if (agent.isTeamLead) {
-            this.runtime.removeTeammates(id);
+        } else if (message.type === 'addExternalAssetDirectory') {
+          const uris = await vscode.window.showOpenDialog({
+            canSelectFolders: true,
+            canSelectFiles: false,
+            canSelectMany: false,
+            openLabel: 'Select Asset Directory',
+          });
+          if (!uris || uris.length === 0) return;
+          const newPath = uris[0].fsPath;
+          const cfg = readConfig();
+          if (!cfg.externalAssetDirectories.includes(newPath)) {
+            cfg.externalAssetDirectories.push(newPath);
+            writeConfig(cfg);
           }
-          // Dismiss JSONL so external scanner doesn't re-adopt it
-          this.runtime.dismissalTracker.dismiss(agent.jsonlFile);
-          this.runtime.unregisterAgent(agent.sessionId);
-          this.runtime.removeAgent(id);
+          await this.reloadAndSendCharacters();
+          await this.reloadAndSendPets();
+          await this.reloadAndSendFurniture();
+          this.webview?.postMessage({
+            type: 'externalAssetDirectoriesUpdated',
+            dirs: cfg.externalAssetDirectories,
+          });
+        } else if (message.type === 'removeExternalAssetDirectory') {
+          const cfg = readConfig();
+          cfg.externalAssetDirectories = cfg.externalAssetDirectories.filter(
+            (d) => d !== (message.path as string),
+          );
+          writeConfig(cfg);
+          await this.reloadAndSendCharacters();
+          await this.reloadAndSendPets();
+          await this.reloadAndSendFurniture();
+          this.webview?.postMessage({
+            type: 'externalAssetDirectoriesUpdated',
+            dirs: cfg.externalAssetDirectories,
+          });
+        } else if (message.type === 'importLayout') {
+          const uris = await vscode.window.showOpenDialog({
+            filters: { 'JSON Files': ['json'] },
+            canSelectMany: false,
+          });
+          if (!uris || uris.length === 0) return;
+          try {
+            const raw = fs.readFileSync(uris[0].fsPath, 'utf-8');
+            const imported = JSON.parse(raw) as Record<string, unknown>;
+            if (imported.version !== 1 || !Array.isArray(imported.tiles)) {
+              vscode.window.showErrorMessage('Pixel Agents: Invalid layout file.');
+              return;
+            }
+            this.layoutWatcher?.markOwnWrite();
+            writeLayoutToFile(imported);
+            this.webview?.postMessage({ type: 'layoutLoaded', layout: imported });
+            vscode.window.showInformationMessage('Pixel Agents: Layout imported successfully.');
+          } catch {
+            vscode.window.showErrorMessage('Pixel Agents: Failed to read or parse layout file.');
+          }
         }
-      }
-    });
+      }),
+    );
+
+    this.viewEventListeners.push(
+      vscode.window.onDidChangeActiveTerminal((terminal) => {
+        if (!terminal) return;
+        this.runtime.activeAgentId.current = null;
+        for (const [id, agent] of this.store) {
+          if (agent.terminalRef && agent.terminalRef === terminal) {
+            this.runtime.activeAgentId.current = id;
+            webviewView.webview.postMessage({ type: 'agentSelected', id });
+            break;
+          }
+        }
+      }),
+    );
+
+    this.viewEventListeners.push(
+      vscode.window.onDidCloseTerminal((closed) => {
+        for (const [id, agent] of this.store) {
+          if (agent.terminalRef && agent.terminalRef === closed) {
+            if (this.runtime.activeAgentId.current === id) {
+              this.runtime.activeAgentId.current = null;
+            }
+            // If this is a team lead, remove its teammates
+            if (agent.isTeamLead) {
+              this.runtime.removeTeammates(id);
+            }
+            // Dismiss JSONL so external scanner doesn't re-adopt it
+            this.runtime.dismissalTracker.dismiss(agent.jsonlFile);
+            this.runtime.unregisterAgent(agent.sessionId);
+            this.runtime.removeAgent(id);
+          }
+        }
+      }),
+    );
   }
 
   /** Export current saved layout as a versioned default-layout-{N}.json (dev utility) */
@@ -1147,6 +1165,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   }
 
   dispose() {
+    for (const d of this.viewEventListeners) d.dispose();
+    this.viewEventListeners = [];
     this.pixelAgentsServer?.stop();
     this.pixelAgentsServer = null;
     this.runtime.dispose();
@@ -1183,7 +1203,11 @@ function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): s
     `connect-src ${webview.cspSource}`,
   ].join('; ');
   html = html
-    .replace(/<head([^>]*)>/i, (_m, headAttrs) => `<head${headAttrs}><meta http-equiv="Content-Security-Policy" content="${csp}">`)
+    .replace(
+      /<head([^>]*)>/i,
+      (_m, headAttrs) =>
+        `<head${headAttrs}><meta http-equiv="Content-Security-Policy" content="${csp}">`,
+    )
     .replace(/<script(?![^>]*\snonce=)/g, `<script nonce="${nonce}"`);
 
   return html;
