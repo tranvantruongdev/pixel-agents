@@ -172,6 +172,14 @@ test.describe('Standalone / UI', () => {
     }
   });
 
+  test('Escape closes the Settings modal @area:standalone', async ({ page, standalone }) => {
+    await standalone.drainMessages();
+
+    const modal = await openSettingsModal(page);
+    await page.keyboard.press('Escape');
+    await expect(modal).toBeHidden();
+  });
+
   test('ConnectionIndicator appears when the WebSocket connection drops @area:standalone', async ({
     page,
     standalone,

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useEffect } from 'react';
 
 import { Button } from './Button.js';
 
@@ -20,6 +21,21 @@ export function Modal({
   zIndex = 50,
   className = '',
 }: ModalProps) {
+  // Escape closes while open. Document-level so it works wherever focus sits
+  // (the office never focuses the panel). stopPropagation keeps the event from
+  // the surfaces stacked UNDER a modal — the layout editor's Esc ladder and the
+  // Intro tour — which a modal outranks (see IntroBubble escapeSuppressed).
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
