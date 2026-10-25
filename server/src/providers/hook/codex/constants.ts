@@ -3,6 +3,8 @@
  * we install) and the display strings are auditable in a single place.
  */
 
+import { HOOK_SCRIPTS_DIR } from '../../../constants.js';
+
 /** Hook events to install in Codex's hooks config. This list is the whole
  *  data-collection surface: Codex runs each of these and pipes the payload to
  *  our local server, so an event we do not act on is scope we should not ask for.
@@ -62,8 +64,16 @@ export const HOOKS_TMP_SUFFIX = '.pixel-agents-tmp';
 export const CODEX_HOOK_SCRIPT_NAME = 'codex-hook.js';
 
 /** Path fragment identifying a command as ours, used when deciding whether an
- *  entry in the user's hooks.json belongs to us and may be removed. */
-export const HOOK_PATH_SUFFIX = `/${CODEX_HOOK_SCRIPT_NAME}`;
+ *  entry in the user's hooks.json belongs to us and may be removed.
+ *
+ *  Anchored at the branded directory, not the bare filename: `codex-hook.js`
+ *  is the obvious name for a hook any Codex user writes themselves, and a
+ *  suffix of `/codex-hook.js` alone claimed — and uninstall deleted — their
+ *  `node /opt/mine/codex-hook.js` entry. `/.pixel-agents/hooks/` cannot occur
+ *  in a stranger's path by accident, and the leading separator keeps
+ *  `/opt/evil.pixel-agents/hooks/codex-hook.js` from matching. Same anchoring
+ *  rule as the Claude installer's HOOK_PATH_SUFFIX. */
+export const HOOK_PATH_SUFFIX = `/${HOOK_SCRIPTS_DIR}/${CODEX_HOOK_SCRIPT_NAME}`;
 
 /** Codex context windows, by model family. Only the provider can map a model id
  *  a transcript reports to the window it counts against, and getting it wrong is

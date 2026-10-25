@@ -46,6 +46,13 @@ const FOREIGN = {
   hooks: [{ type: 'command', command: 'python3 /opt/someone-else/audit.py' }],
 };
 
+/** A stranger's hook that merely shares our script's FILENAME. `codex-hook.js`
+ *  is the obvious name for any user-written Codex hook, so the directory — not
+ *  the name — must be what makes a command ours. */
+const LOOKALIKE = {
+  hooks: [{ type: 'command', command: 'node /opt/mine/codex-hook.js' }],
+};
+
 describe('codexHookInstaller', () => {
   describe('install', () => {
     it('creates hooks.json with an entry for every declared event', async () => {
@@ -114,6 +121,16 @@ describe('codexHookInstaller', () => {
       const hooks = readFile()['hooks'] as Record<string, unknown[]>;
       expect(hooks['UserPromptSubmit']).toHaveLength(1);
       expect(JSON.stringify(hooks['UserPromptSubmit'])).toContain('audit.py');
+    });
+
+    it('preserves a same-named stranger hook in a different directory', async () => {
+      // Only the branded directory makes a command ours; a user's own hook
+      // named codex-hook.js must survive our install, not be replaced by it.
+      writeFile({ hooks: { PreToolUse: [LOOKALIKE] } });
+      await installHooks('u', 't');
+      const hooks = readFile()['hooks'] as Record<string, unknown[]>;
+      expect(hooks['PreToolUse']).toHaveLength(2);
+      expect(JSON.stringify(hooks['PreToolUse'])).toContain('/opt/mine/codex-hook.js');
     });
 
     it('preserves unrelated top-level keys', async () => {
@@ -278,6 +295,16 @@ describe('codexHookInstaller', () => {
       expect(JSON.stringify(after)).not.toContain('codex-hook.js');
     });
 
+    it('keeps a same-named stranger hook — the directory is the identity', async () => {
+      // Uninstall deleted this entry (and then the whole file, when it was the
+      // only one) because the suffix matched on the bare filename.
+      writeFile({ hooks: { PreToolUse: [LOOKALIKE] } });
+      await uninstallHooks();
+      expect(fs.existsSync(getCodexHooksPath())).toBe(true);
+      const hooks = readFile()['hooks'] as Record<string, unknown[]>;
+      expect(JSON.stringify(hooks['PreToolUse'])).toContain('/opt/mine/codex-hook.js');
+    });
+
     it('is a no-op when there is no file', async () => {
       await expect(uninstallHooks()).resolves.toBeUndefined();
     });
@@ -310,6 +337,11 @@ describe('codexHookInstaller', () => {
       expect(isOurHookCommand('python3 /opt/audit.py')).toBe(false);
       expect(isOurHookCommand('node /opt/other/hook.js')).toBe(false);
       expect(isOurHookCommand('')).toBe(false);
+    });
+    it('does not claim a same-named script outside our directory', () => {
+      expect(isOurHookCommand('node /opt/mine/codex-hook.js')).toBe(false);
+      expect(isOurHookCommand('node "D:/tools/codex-hook.js"')).toBe(false);
+      expect(isOurHookCommand('node /opt/evil.pixel-agents/hooks/codex-hook.js')).toBe(false);
     });
     it('does not claim the Claude hook — the two must be independent', () => {
       expect(isOurHookCommand('node "/Users/x/.pixel-agents/hooks/claude-hook.js"')).toBe(false);
