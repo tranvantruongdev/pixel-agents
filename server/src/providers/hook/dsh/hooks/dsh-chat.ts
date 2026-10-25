@@ -25,7 +25,6 @@ import { isServerConfig } from '../../../../serverConfig.js';
 import {
   DSH_PROVIDER_ID,
   dshAppPath,
-  killRunningTurn,
   patchFilePath,
 } from '../dsh.js';
 
@@ -101,6 +100,9 @@ fs.writeFileSync(patchFile, ACCOUNT_PATCH);
 
 let dshSessionId: string | undefined;
 let running: ReturnType<typeof spawn> | undefined;
+/** Set the moment the loop closes; a turn finishing after that must not touch
+ *  the closed readline (resume/prompt on it throws ERR_USE_AFTER_CLOSE). */
+let exiting = false;
 
 function runTurn(task: string, done: () => void): void {
   const cliJs = path.join(
@@ -122,6 +124,9 @@ function runTurn(task: string, done: () => void): void {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   running = child;
+  // Exiting mid-turn kills the child before this pipe's pending task write
+  // flushes; without the listener that surfaces as an uncaught crash.
+  child.stdin.on('error', () => {});
   child.stdin.end(task);
 
   let stderr = '';
@@ -193,12 +198,19 @@ rl.on('line', (line) => {
   if (!task || running) return rl.prompt();
   rl.pause();
   runTurn(task, () => {
+    if (exiting) return; // the loop exited while this turn ran
     rl.resume();
     rl.prompt();
   });
 });
 rl.on('close', () => {
-  killRunningTurn(running);
+  exiting = true;
+  running?.kill();
+  try {
+    fs.rmSync(patchFile, { force: true });
+  } catch {
+    /* temp file: best effort */
+  }
   post({ hook_event_name: 'SessionEnd', reason: 'exit' });
   setTimeout(() => process.exit(0), 300);
 });
