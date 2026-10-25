@@ -206,6 +206,22 @@ export function startFileWatching(
   pollingTimers.set(agentId, interval);
 }
 
+/** End offset of the last complete UTF-8 sequence in buf. When the final
+ *  sequence is incomplete (a multi-byte character split by the read cap or a
+ *  mid-write poll), returns the offset of its lead byte so those bytes stay
+ *  unread for the next poll to re-read whole. */
+function lastCompleteUtf8End(buf: Buffer): number {
+  let lead = buf.length;
+  let continuations = 0;
+  while (lead > 0 && continuations < 3 && (buf[lead - 1]! & 0xc0) === 0x80) {
+    lead--;
+    continuations++;
+  }
+  if (lead === 0 || (buf[lead - 1]! & 0xc0) !== 0xc0) return buf.length;
+  const expected = buf[lead - 1]! >= 0xf0 ? 4 : buf[lead - 1]! >= 0xe0 ? 3 : 2;
+  return continuations + 1 === expected ? buf.length : lead - 1;
+}
+
 export function readNewLines(
   agentId: number,
   agents: AgentStateStore,
@@ -229,9 +245,15 @@ export function readNewLines(
     } finally {
       fs.closeSync(fd);
     }
-    agent.fileOffset += bytesToRead;
+    // Decode only through the last complete UTF-8 sequence: decoding a partial
+    // one would bake a permanent U+FFFD into lineBuffer even after the
+    // remaining bytes arrive, garbling every non-ASCII character the read cut
+    // through (tool statuses, messages). fileOffset stops before the partial
+    // bytes so the next poll re-reads the character whole.
+    const decodeEnd = lastCompleteUtf8End(buf);
+    agent.fileOffset += decodeEnd;
 
-    const text = agent.lineBuffer + buf.toString('utf-8');
+    const text = agent.lineBuffer + buf.toString('utf-8', 0, decodeEnd);
     const lines = text.split('\n');
     agent.lineBuffer = lines.pop() || '';
 
