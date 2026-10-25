@@ -34,6 +34,13 @@ export function dshAppPath(): string {
   );
 }
 
+/** Path the chat loop writes its account patch to — one file per running
+ *  loop (keyed by pid): with one shared fixed name, one loop's rewrite could
+ *  hand another loop's dsh child a torn, half-written yml. */
+export function patchFilePath(tmpdir: string, pid: number): string {
+  return path.join(tmpdir, `pixel-agents-dsh-account-${pid}.yml`);
+}
+
 /** Kill the chat loop's still-running headless turn, if any. /exit and
  *  Ctrl+D close the loop even mid-turn; without this the dsh child outlives
  *  the loop as an orphan that keeps spending account credit. */

@@ -22,7 +22,12 @@ import * as readline from 'readline';
 import { HOOK_API_PREFIX, SERVER_JSON_DIR, SERVERS_DIR } from '../../../../constants.js';
 import type { ServerConfig } from '../../../../serverConfig.js';
 import { isServerConfig } from '../../../../serverConfig.js';
-import { DSH_PROVIDER_ID, dshAppPath, killRunningTurn } from '../dsh.js';
+import {
+  DSH_PROVIDER_ID,
+  dshAppPath,
+  killRunningTurn,
+  patchFilePath,
+} from '../dsh.js';
 
 /** The headless profile ships with the DeepSeek account sign-in switched off
  *  (API key only). This overlay turns it back on and selects the account
@@ -91,7 +96,7 @@ function post(event: Record<string, unknown>): void {
   }
 }
 
-const patchFile = path.join(os.tmpdir(), 'pixel-agents-dsh-account.yml');
+const patchFile = patchFilePath(os.tmpdir(), process.pid);
 fs.writeFileSync(patchFile, ACCOUNT_PATCH);
 
 let dshSessionId: string | undefined;
