@@ -154,10 +154,11 @@ export function useEditorActions(
    * Apply a layout edit: rebuild state, save, mark dirty — and push undo
    * unless the edit continues the undo session the newest entry already
    * covers (a stroke, a slider run; see EditorState.beginEdit). An edit that
-   * returns the current layout unchanged is a no-op.
+   * returns the current layout unchanged is a no-op. `shift` moves characters
+   * when the edit itself grew the grid left/up (see rebuildFromLayout).
    */
   const commitLayout = useCallback(
-    (newLayout: OfficeLayout, session: string | null) => {
+    (newLayout: OfficeLayout, session: string | null, shift?: { col: number; row: number }) => {
       const os = getOfficeState();
       if (newLayout === os.getLayout()) return; // the edit changed nothing
       if (editorState.beginEdit(session)) {
@@ -166,7 +167,7 @@ export function useEditorActions(
       }
       editorState.isDirty = true;
       setIsDirty(true);
-      os.rebuildFromLayout(newLayout);
+      os.rebuildFromLayout(newLayout, shift);
       saveLayout(newLayout);
       bumpTick();
     },
@@ -185,7 +186,8 @@ export function useEditorActions(
    * leave / tool change / Esc via `editorState.endStroke()`.
    */
   const applyStrokeEdit = useCallback(
-    (newLayout: OfficeLayout) => commitLayout(newLayout, 'stroke'),
+    (newLayout: OfficeLayout, shift?: { col: number; row: number }) =>
+      commitLayout(newLayout, 'stroke', shift),
     [commitLayout],
   );
 
@@ -608,26 +610,31 @@ export function useEditorActions(
    */
   const handleEditorTileAction = useCallback(
     (col: number, row: number) => {
-      const os = getOfficeState();
-      const layout = os.getLayout();
+      const layout = getOfficeState().getLayout();
       switch (editorState.activeTool) {
         case EditTool.TILE_PAINT:
         case EditTool.WALL_PAINT: {
-          // Floor and wall tools grow the grid when they hit the ghost border;
-          // rebuild from the expanded layout first, shifting characters along.
+          // Floor and wall tools grow the grid when they hit the ghost border.
+          // The painted expanded layout is committed as one stroke edit — the
+          // undo entry captures the pre-expansion layout, so undo reverts the
+          // paint and the grid bounds together. Rebuilding the expansion into
+          // OfficeState first would push an undo entry that already has the
+          // bigger grid.
           const expansion = maybeExpand(layout, col, row);
-          if (expansion) os.rebuildFromLayout(expansion.layout, expansion.shift);
           const base = expansion?.layout ?? layout;
           const c = expansion?.col ?? col;
           const r = expansion?.row ?? row;
           const floor = { type: editorState.selectedTileType, color: editorState.floorColor };
           if (editorState.activeTool === EditTool.TILE_PAINT) {
-            applyStrokeEdit(paintTile(base, c, r, floor.type, floor.color));
+            applyStrokeEdit(paintTile(base, c, r, floor.type, floor.color), expansion?.shift);
           } else {
             // The stroke's first tile decides whether it adds or removes walls.
             editorState.wallDragAdding ??= wallStrokeAdds(base, c, r);
             const adding = editorState.wallDragAdding;
-            applyStrokeEdit(wallStrokeTile(base, c, r, adding, editorState.wallColor, floor));
+            applyStrokeEdit(
+              wallStrokeTile(base, c, r, adding, editorState.wallColor, floor),
+              expansion?.shift,
+            );
           }
           return;
         }
