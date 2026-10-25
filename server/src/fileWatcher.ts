@@ -99,6 +99,13 @@ let clearDetectionDeps: {
   persistAgents: () => void;
 } | null = null;
 
+/** Files whose 8KB head was read and held no /clear record. Transcripts are
+ *  append-only (a /clear or --resume creates a NEW session file), so a head
+ *  that lacked the record never gains it — re-reading it on every 500ms poll
+ *  of an idle agent re-read the same bytes forever. Claimed /clear files go
+ *  into knownJsonlFiles instead, so this set only ever skips dead candidates. */
+const checkedNonClearFiles = new Set<string>();
+
 export function startFileWatching(
   agentId: number,
   _filePath: string,
@@ -155,6 +162,7 @@ export function startFileWatching(
         // The main scanner does NOT add non-adopted files to knownJsonlFiles,
         // so /clear files remain findable here.
         for (const file of dirFiles) {
+          if (checkedNonClearFiles.has(file)) continue;
           if (deps.knownJsonlFiles.has(file)) continue;
           if (dismissalTracker!.isDismissed(file)) continue;
           let tracked = false;
@@ -177,7 +185,10 @@ export function startFileWatching(
             } finally {
               fs.closeSync(fd);
             }
-            if (!buf.toString('utf-8', 0, bytesRead).includes('/clear</command-name>')) continue;
+            if (!buf.toString('utf-8', 0, bytesRead).includes('/clear</command-name>')) {
+              checkedNonClearFiles.add(file);
+              continue;
+            }
           } catch {
             continue;
           }
