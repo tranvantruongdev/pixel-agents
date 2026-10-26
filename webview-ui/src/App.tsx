@@ -310,14 +310,11 @@ function App() {
       };
     };
     hooks.getShowAreas = () => effectiveShowAreas;
-  }, [
-    editor.handleEditorTileAction,
-    editor.handleEditorEraseAction,
-    editor.handleDrop,
-    editor.zoom,
-    editor.panRef,
-    effectiveShowAreas,
-  ]);
+    // editor is a fresh object every render (useEditorActions returns a new
+    // literal and its handle* callbacks re-bind per render via colorActions),
+    // so whole-object deps re-run this at the same per-render cadence the
+    // per-property list already had.
+  }, [editor, effectiveShowAreas]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
