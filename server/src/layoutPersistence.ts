@@ -38,7 +38,10 @@ export function writeLayoutToFile(layout: Record<string, unknown>): void {
       fs.mkdirSync(dir, { recursive: true });
     }
     const json = JSON.stringify(layout, null, 2);
-    const tmpPath = filePath + '.tmp';
+    // Per-process tmp name: every window shares this file, so a fixed tmp
+    // name lets one window rename away another's half-written bytes and
+    // leave torn JSON behind for the remaining readers.
+    const tmpPath = `${filePath}.${process.pid}.tmp`;
     fs.writeFileSync(tmpPath, json, 'utf-8');
     fs.renameSync(tmpPath, filePath);
   } catch (err) {
@@ -61,12 +64,16 @@ interface LayoutLoadResult {
  * time this is called, the file is the only source of truth.
  *
  * 1. If file exists → return it (reset if bundled default has a newer revision)
- * 2. Else if defaultLayout provided → write to file, return it
- * 3. Else → return null
+ * 2. If file exists but is unreadable → serve the default for this session,
+ *    leaving the file untouched (the user may still recover it, and the next
+ *    real saveLayout rewrites it cleanly)
+ * 3. Else if defaultLayout provided → write to file, return it
+ * 4. Else → return null
  */
 export function loadLayout(
   defaultLayout?: Record<string, unknown> | null,
 ): LayoutLoadResult | null {
+  const fileExists = fs.existsSync(getLayoutFilePath());
   const fromFile = readLayoutFromFile();
   if (fromFile) {
     const fileRevision = (fromFile[LAYOUT_REVISION_KEY] as number) ?? 0;
@@ -80,6 +87,13 @@ export function loadLayout(
     }
     console.log('[Pixel Agents] Layout loaded from file');
     return { layout: fromFile, wasReset: false };
+  }
+
+  if (fileExists) {
+    console.error(
+      '[Pixel Agents] Layout file exists but is unreadable; keeping it on disk and using the bundled default for this session',
+    );
+    return defaultLayout ? { layout: defaultLayout, wasReset: false } : null;
   }
 
   if (defaultLayout) {
