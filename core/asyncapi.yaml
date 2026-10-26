@@ -210,6 +210,17 @@ components:
           type: string
         isExternal:
           type: boolean
+        isTeammate:
+          type: boolean
+        teammateName:
+          type: string
+        parentAgentId:
+          type: integer
+        teamName:
+          type: string
+        hooksOnly:
+          type: boolean
+          description: True when the agent has no transcript file; all state arrives via hooks.
         palette:
           type: integer
           description: Server-assigned character palette index.

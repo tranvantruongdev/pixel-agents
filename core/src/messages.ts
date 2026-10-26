@@ -94,6 +94,11 @@ export interface AgentCreated {
   id: number;
   directoryName?: string;
   isExternal?: boolean;
+  isTeammate?: boolean;
+  teammateName?: string;
+  parentAgentId?: number;
+  teamName?: string;
+  hooksOnly?: boolean;
   palette?: number;
   hueShift?: number;
 }
