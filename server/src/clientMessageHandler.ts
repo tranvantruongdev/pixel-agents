@@ -22,7 +22,7 @@ import {
 } from './directories.js';
 import { collectDirectorySuggestions } from './directorySuggestions.js';
 import { hostDirectory } from './hostDirectory.js';
-import { readLayoutFromFile, writeLayoutToFile } from './layoutPersistence.js';
+import { loadLayout, writeLayoutToFile } from './layoutPersistence.js';
 import type { ConsentEffects } from './providers/hook/consentExecutor.js';
 import { applyConsentChoice } from './providers/hook/consentExecutor.js';
 import { hooksConsentRequest } from './providers/hook/consentGate.js';
@@ -643,9 +643,16 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
   });
 
   // 7. Layout last (see step 3): flushes the webview's buffered existingAgents
-  // into characters once seats are rebuilt.
-  const savedLayout = readLayoutFromFile();
-  send({ type: 'layoutLoaded', layout: savedLayout ?? cache?.defaultLayout ?? null });
+  // into characters once seats are rebuilt. loadLayout, not a bare read: an
+  // outdated saved revision resets to the bundled default and the client is
+  // told via wasReset (drives the webview's migration notice) — the same
+  // sendLayout contract the VS Code host applies.
+  const layout = loadLayout(cache?.defaultLayout);
+  send({
+    type: 'layoutLoaded',
+    layout: layout?.layout ?? null,
+    wasReset: layout?.wasReset ?? false,
+  });
 
   // 8. Agent state, AFTER layoutLoaded -- the characters they target only
   // exist once the layout flush creates them. Without this a reconnecting

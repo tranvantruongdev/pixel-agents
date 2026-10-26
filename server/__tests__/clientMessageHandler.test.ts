@@ -11,8 +11,9 @@ import {
   handleClientMessage,
 } from '../src/clientMessageHandler.js';
 import { getHooksEnabled, readConfig, setHooksEnabled } from '../src/configPersistence.js';
-import { TERMINAL_REQUIRES_TOKEN_REASON } from '../src/constants.js';
+import { LAYOUT_REVISION_KEY, TERMINAL_REQUIRES_TOKEN_REASON } from '../src/constants.js';
 import { FileStateAdapter } from '../src/fileStateAdapter.js';
+import { writeLayoutToFile } from '../src/layoutPersistence.js';
 import { claudeProvider } from '../src/providers/hook/claude/claude.js';
 import { CLAUDE_HOOK_EVENTS } from '../src/providers/hook/claude/constants.js';
 import type { IPty, PtyModule } from '../src/terminal/ptyModule.js';
@@ -436,6 +437,81 @@ describe('clientMessageHandler: areas + carpet wire ordering', () => {
       expect(areaMsgs).toHaveLength(1);
       expect((areaMsgs[0] as { mappings: Record<string, string[]> }).mappings).toEqual({});
     });
+  });
+});
+
+describe('clientMessageHandler: webviewReady layout revision reset', () => {
+  let tempHome: string;
+  let restoreHomeEnv: () => void;
+  let store: AgentStateStore;
+  let sent: Array<Record<string, unknown>>;
+  let ctx: ClientMessageContext;
+
+  function freshCtx(cache: AssetCache | null = null): ClientMessageContext {
+    return { store, cache, privileged: true };
+  }
+
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-cmh-layout-'));
+    restoreHomeEnv = isolateHomeEnv(tempHome);
+
+    store = new AgentStateStore();
+    store.setAdapter(new FileStateAdapter({ namespace: 'standalone' }));
+    sent = [];
+    ctx = freshCtx();
+  });
+
+  afterEach(() => {
+    restoreHomeEnv();
+    store.dispose();
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  function layoutCache(defaultLayout: Record<string, unknown>): AssetCache {
+    return {
+      characters: null,
+      pets: null,
+      floorTiles: null,
+      wallTiles: null,
+      carpetTiles: null,
+      furniture: null,
+      defaultLayout,
+    };
+  }
+
+  // The VS Code host reports a bundled-default layout reset through
+  // sendLayout -> loadLayout (wasReset drives the webview's MigrationNotice).
+  // The standalone handshake must answer the same scenario the same way.
+  it('resets an outdated saved layout to the bundled default and reports wasReset', () => {
+    const saved = { version: 1, cols: 20, rows: 12, tiles: [], [LAYOUT_REVISION_KEY]: 1 };
+    writeLayoutToFile(saved);
+    const bundled = { version: 1, cols: 24, rows: 14, tiles: [], [LAYOUT_REVISION_KEY]: 2 };
+    ctx = freshCtx(layoutCache(bundled));
+
+    handleClientMessage({ type: 'webviewReady' }, (m) => sent.push(m), ctx);
+
+    const layoutMsg = sent.find((m) => m.type === 'layoutLoaded') as
+      | { layout?: Record<string, unknown>; wasReset?: boolean }
+      | undefined;
+    expect(layoutMsg).toBeDefined();
+    expect(layoutMsg?.wasReset).toBe(true);
+    expect(layoutMsg?.layout).toMatchObject({ [LAYOUT_REVISION_KEY]: 2 });
+  });
+
+  it('keeps a current saved layout and reports wasReset false', () => {
+    const saved = { version: 1, cols: 20, rows: 12, tiles: [], [LAYOUT_REVISION_KEY]: 2 };
+    writeLayoutToFile(saved);
+    const bundled = { version: 1, cols: 24, rows: 14, tiles: [], [LAYOUT_REVISION_KEY]: 2 };
+    ctx = freshCtx(layoutCache(bundled));
+
+    handleClientMessage({ type: 'webviewReady' }, (m) => sent.push(m), ctx);
+
+    const layoutMsg = sent.find((m) => m.type === 'layoutLoaded') as
+      | { layout?: Record<string, unknown>; wasReset?: boolean }
+      | undefined;
+    expect(layoutMsg).toBeDefined();
+    expect(layoutMsg?.wasReset).toBe(false);
+    expect(layoutMsg?.layout).toMatchObject({ cols: 20 });
   });
 });
 
