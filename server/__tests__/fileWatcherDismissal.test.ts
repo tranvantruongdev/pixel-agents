@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // fileWatcher.ts does `import * as vscode from 'vscode'` at module load; the 'vscode'
 // package only resolves inside the extension host. Stub the two APIs fileWatcher actually
@@ -19,6 +19,7 @@ import {
   DISMISSED_COOLDOWN_MS,
   EXTERNAL_ACTIVE_THRESHOLD_MS,
   EXTERNAL_SCAN_INTERVAL_MS,
+  EXTERNAL_STALE_CHECK_INTERVAL_MS,
 } from '../src/constants.js';
 import { DismissalTracker } from '../src/dismissalTracker.js';
 import {
@@ -26,9 +27,11 @@ import {
   ensureProjectScan,
   scanExternalDir,
   scanForNewJsonlFiles,
+  setAgentRemovalCallback,
   setDismissalTracker,
   setTeamProvider,
   startExternalSessionScanning,
+  startStaleExternalAgentCheck,
 } from '../src/fileWatcher.js';
 import { PathSet } from '../src/pathKey.js';
 import { claudeTeamProvider } from '../src/providers/hook/claude/claudeTeamProvider.js';
@@ -522,6 +525,62 @@ describe('fileWatcher dismissal state', () => {
       } finally {
         platformSpy.mockRestore();
       }
+    });
+  });
+
+  // ── startStaleExternalAgentCheck ─────────────────────────────────
+
+  describe('startStaleExternalAgentCheck', () => {
+    // The check never removes from the store itself: it reports ids through the
+    // agentRemovalCallback registered by the host, so that callback is the
+    // observable under test.
+    const removals = vi.fn();
+    beforeAll(() => setAgentRemovalCallback(removals));
+    afterAll(() => setAgentRemovalCallback(null));
+
+    /** Run exactly one stale-check tick with hooks off (heuristic mode). */
+    function runOneStaleTick(): void {
+      vi.useFakeTimers();
+      const timer = startStaleExternalAgentCheck(agents, knownJsonlFiles, { current: false });
+      try {
+        vi.advanceTimersByTime(EXTERNAL_STALE_CHECK_INTERVAL_MS);
+      } finally {
+        clearInterval(timer);
+        vi.useRealTimers();
+      }
+    }
+
+    it('reports an external agent whose JSONL file was deleted', () => {
+      const file = writeJsonlFile('gone-session.jsonl', '{"type":"assistant"}\n');
+      agents.set(1, { id: 1, isExternal: true, projectDir, jsonlFile: file } as AgentState);
+      fs.unlinkSync(file);
+      removals.mockClear();
+
+      runOneStaleTick();
+
+      expect(removals).toHaveBeenCalledWith(1);
+    });
+
+    it('never reports a live hooks-only external agent (it has no JSONL file to vanish)', () => {
+      // adoptExternalSessionFromHook creates hooks-only agents (OpenCode/Copilot)
+      // with jsonlFile '' — there is no transcript to stat. The check's own
+      // premise is "despawn when the JSONL file is deleted", and statSync('')
+      // always throws ENOENT, so an unguarded check despanws a live session on
+      // its first tick. The hooksEnabled gate does not save it: that ref follows
+      // the CLAUDE provider, while hooks-only agents deliver through their own
+      // provider's hooks.
+      agents.set(1, {
+        id: 1,
+        isExternal: true,
+        hooksOnly: true,
+        projectDir,
+        jsonlFile: '',
+      } as AgentState);
+      removals.mockClear();
+
+      runOneStaleTick();
+
+      expect(removals).not.toHaveBeenCalled();
     });
   });
 

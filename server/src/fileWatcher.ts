@@ -1564,6 +1564,13 @@ export function startStaleExternalAgentCheck(
     for (const [id, agent] of agents) {
       if (!agent.isExternal) continue;
 
+      // Hooks-only agents have no transcript at all (jsonlFile ''): their
+      // lifecycle is their own provider's hooks (SessionEnd removes them), and
+      // statSync('') throws ENOENT every tick, which would despawn a live
+      // session. The hooksEnabled gate doesn't cover them — it follows the
+      // CLAUDE provider, not theirs.
+      if (agent.hooksOnly) continue;
+
       // Only despawn if the JSONL file has been deleted from disk.
       // Inactive external agents stay alive so they can resume when
       // the session continues (e.g., claude --resume).
