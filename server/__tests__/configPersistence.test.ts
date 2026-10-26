@@ -411,7 +411,10 @@ describe('configPersistence: writeConfig transient rename failures', () => {
         expect(readConfig().vscode.showAreas).toBe(true);
       } finally {
         locker.kill();
-        await new Promise<void>((resolve) => locker.once('exit', () => resolve()));
+        // The locker often exits on its own first; a late 'exit' listener never fires.
+        if (locker.exitCode === null && locker.signalCode === null) {
+          await new Promise<void>((resolve) => locker.once('exit', () => resolve()));
+        }
       }
     }, 15_000);
   });
