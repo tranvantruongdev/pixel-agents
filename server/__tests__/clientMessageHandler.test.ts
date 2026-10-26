@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentRuntime } from '../src/agentRuntime.js';
 import { AgentStateStore } from '../src/agentStateStore.js';
@@ -1361,6 +1361,32 @@ describe('clientMessageHandler: read-only (untokened) clients', () => {
       { store, cache: null, privileged: false },
     );
     expect(sent).toEqual([{ type: 'areaMappingsLoaded', mappings: {} }]);
+  });
+
+  it('caps the refusal dedupe so a flood of distinct junk types cannot grow it without bound', () => {
+    // The type string is attacker-controlled and reaches refuseReadOnly before
+    // any privilege gate, and the dedupe set lives for the process lifetime: an
+    // untokened client spraying distinct types must not grow it forever (same
+    // bound class as the WebSocket send queue cap). Warn count is the observable
+    // for the set: every entry is logged exactly once.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 300; i++) {
+        handleClientMessage({ type: `flood-${i}` }, (m) => sent.push(m), {
+          store,
+          cache: null,
+          privileged: false,
+        });
+      }
+      const refusalWarns = warn.mock.calls.filter((args) =>
+        args.some((a) => typeof a === 'string' && a.includes('Ignoring')),
+      );
+      // 128 = the source-side cap; real traffic uses ~20 types and never
+      // reaches it. Fewer is fine (earlier tests may have filled the set).
+      expect(refusalWarns.length).toBeLessThanOrEqual(128);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('still loads the office', () => {

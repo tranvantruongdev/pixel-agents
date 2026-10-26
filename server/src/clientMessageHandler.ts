@@ -712,7 +712,12 @@ export function clipClientType(type: string): string {
 }
 
 /** Message types already reported as refused, so a read-only client that keeps
- *  sending (seat saves, layout saves) logs once per type, not per message. */
+ *  sending (seat saves, layout saves) logs once per type, not per message. The
+ *  type is attacker-controlled and the set is process-lifetime, so the cap keeps
+ *  a flood of distinct junk types from growing it without bound; real traffic
+ *  uses ~20 types and never reaches it. Past the cap junk types are refused
+ *  silently — they were refused either way, only the warn goes quiet. */
+const REPORTED_REFUSALS_MAX = 128;
 const reportedRefusals = new Set<string>();
 
 /**
@@ -727,7 +732,7 @@ function refuseReadOnly(
   ctx: ClientMessageContext,
 ): void {
   const type = clipClientType(String(msg.type));
-  if (!reportedRefusals.has(type)) {
+  if (!reportedRefusals.has(type) && reportedRefusals.size < REPORTED_REFUSALS_MAX) {
     reportedRefusals.add(type);
     console.warn(
       `[Pixel Agents] Ignoring ${type} from a read-only client. Changes need the tokened URL the CLI printed (at localhost or an --allowed-host name).`,
