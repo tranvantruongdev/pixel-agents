@@ -100,12 +100,13 @@ let clearDetectionDeps: {
   persistAgents: () => void;
 } | null = null;
 
-/** Files whose 8KB head was read and held no /clear record. Transcripts are
- *  append-only (a /clear or --resume creates a NEW session file), so a head
- *  that lacked the record never gains it — re-reading it on every 500ms poll
- *  of an idle agent re-read the same bytes forever. Claimed /clear files go
- *  into knownJsonlFiles instead, so this set only ever skips dead candidates. */
-const checkedNonClearFiles = new Set<string>();
+/** Files whose head was read and held no /clear record -> bytes read. Transcripts
+ *  are append-only (a /clear or --resume creates a NEW session file), so a full
+ *  8KB head that lacked the record never gains it — re-reading it on every 500ms
+ *  poll of an idle agent re-read the same bytes forever. A shorter head is a file
+ *  still being written (the /clear record may not have landed yet): it is re-read
+ *  only once its size changes. Claimed /clear files go into knownJsonlFiles. */
+const checkedNonClearFiles = new Map<string, number>();
 
 export function startFileWatching(
   agentId: number,
@@ -163,7 +164,8 @@ export function startFileWatching(
         // The main scanner does NOT add non-adopted files to knownJsonlFiles,
         // so /clear files remain findable here.
         for (const file of dirFiles) {
-          if (checkedNonClearFiles.has(file)) continue;
+          const checkedBytes = checkedNonClearFiles.get(file);
+          if (checkedBytes === 8192) continue;
           if (deps.knownJsonlFiles.has(file)) continue;
           if (dismissalTracker!.isDismissed(file)) continue;
           let tracked = false;
@@ -178,6 +180,7 @@ export function startFileWatching(
           // record. Dropped "last-prompt" check because it also appears in --resume
           // sessions. "/clear</command-name>" is specific to /clear (~1.5KB in file).
           try {
+            if (checkedBytes !== undefined && fs.statSync(file).size === checkedBytes) continue;
             const buf = Buffer.alloc(8192);
             const fd = fs.openSync(file, 'r');
             let bytesRead: number;
@@ -187,7 +190,7 @@ export function startFileWatching(
               fs.closeSync(fd);
             }
             if (!buf.toString('utf-8', 0, bytesRead).includes('/clear</command-name>')) {
-              checkedNonClearFiles.add(file);
+              checkedNonClearFiles.set(file, bytesRead);
               continue;
             }
           } catch {
@@ -1510,9 +1513,13 @@ function scanGlobalProjectDirs(
       // Activity filter: >3KB AND modified within 10 minutes
       try {
         const stat = fs.statSync(file);
-        globalStaleStatAt.set(file, now);
+        // Only age-stale files are throttled: a fresh file still under the
+        // size gate is a new session that must be adopted on the next tick.
+        if (now - stat.mtimeMs > GLOBAL_SCAN_ACTIVE_MAX_AGE_MS) {
+          globalStaleStatAt.set(file, now);
+          continue;
+        }
         if (stat.size < GLOBAL_SCAN_ACTIVE_MIN_SIZE) continue;
-        if (now - stat.mtimeMs > GLOBAL_SCAN_ACTIVE_MAX_AGE_MS) continue;
       } catch {
         continue;
       }

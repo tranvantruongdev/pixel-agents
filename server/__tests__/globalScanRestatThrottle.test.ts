@@ -192,4 +192,21 @@ describe('global scan stale restat throttle (Watch All Sessions)', () => {
     // skip-to-end adoption of an old session would leave it at 0)
     expect(agent.linesProcessed).toBe(20);
   });
+
+  it('adopts a new file that starts under the size gate on the next tick', {
+    timeout: 20_000,
+  }, async () => {
+    await buildProjectsRoot(1);
+    const store = new AgentStateStore();
+    startScan(store, { current: true });
+
+    const fresh = path.join(tmpHome, '.claude', 'projects', 'proj-0', 'new-sess.jsonl');
+    await fsPromises.writeFile(fresh, transcriptChunk(1)); // < 3KB, mtime now
+    await sleep(3500); // tick 1 sees it too small
+    expect(store.size).toBe(0);
+
+    await fsPromises.appendFile(fresh, transcriptChunk(20)); // now > 3KB
+    await sleep(3300); // tick 2 must re-stat it: it is fresh, not stale
+    expect(store.size).toBe(1);
+  });
 });

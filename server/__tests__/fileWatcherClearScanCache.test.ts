@@ -294,6 +294,25 @@ describe('per-agent /clear scan cache (idle terminal agent, hooks off)', () => {
     expect(agent.fileOffset).toBeGreaterThan(0);
   });
 
+  it('claims a /clear file whose /clear record lands after its first scan', {
+    timeout: 15_000,
+  }, async () => {
+    harness = await setupIdleTerminalAgent();
+    const { projectDir, store, agentId } = harness;
+    await sleep(3200); // idle threshold passed, /clear scans running
+
+    const fresh = path.join(projectDir, 'late-clear.jsonl');
+    await fsPromises.writeFile(fresh, normalRecord(0) + '\n'); // scanned: no /clear yet
+    await sleep(1200);
+    await fsPromises.appendFile(fresh, CLEAR_LINE + '\n');
+
+    const deadline = Date.now() + 4000;
+    while (store.get(agentId)?.jsonlFile !== fresh) {
+      if (Date.now() > deadline) throw new Error('late /clear file was never claimed');
+      await sleep(100);
+    }
+  });
+
   it('keeps new-line detection latency inside one 500ms poll', {
     timeout: 15_000,
   }, async () => {
